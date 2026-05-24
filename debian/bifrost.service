@@ -1,0 +1,12 @@
+[Unit]
+Description=BIFROST Screen Broadcasting
+After=network.target avahi-daemon.service display-manager.service
+
+[Service]
+ExecStart=/usr/local/bin/bifrost
+Restart=always
+User=root
+Environment=XDG_SESSION_TYPE=wayland
+
+[Install]
+WantedBy=multi-user.target

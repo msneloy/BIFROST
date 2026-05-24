@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>BIFROST - Live Stream</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #000;
+            color: #fff;
+            font-family: 'Courier New', Courier, monospace;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            border: 4px solid #aa0000;
+            box-sizing: border-box;
+            box-shadow: inset 0 0 50px #ff0000;
+            animation: pulseBorder 4s infinite alternate;
+        }
+
+        @keyframes pulseBorder {
+            0% { box-shadow: inset 0 0 20px #ff0000; border-color: #aa0000; }
+            100% { box-shadow: inset 0 0 60px #ff0000; border-color: #ff3333; }
+        }
+
+        #stream {
+            width: 100vw;
+            height: 100vh;
+            object-fit: contain;
+            position: absolute;
+            z-index: 1;
+        }
+
+        .hud {
+            position: absolute;
+            top: 20px;
+            left: 20px;
+            z-index: 10;
+            display: flex;
+            gap: 15px;
+        }
+
+        .badge {
+            background-color: rgba(170, 0, 0, 0.8);
+            border: 1px solid #ff3333;
+            padding: 5px 10px;
+            border-radius: 4px;
+            font-weight: bold;
+            font-size: 14px;
+            text-shadow: 0 0 5px #fff;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .badge .dot {
+            width: 10px;
+            height: 10px;
+            background-color: #ff3333;
+            border-radius: 50%;
+            animation: blink 1s infinite alternate;
+        }
+
+        @keyframes blink {
+            0% { opacity: 0.3; }
+            100% { opacity: 1; }
+        }
+
+        .controls {
+            position: absolute;
+            bottom: 20px;
+            right: 20px;
+            z-index: 10;
+            display: flex;
+            gap: 10px;
+        }
+
+        button {
+            background-color: rgba(0, 0, 0, 0.6);
+            color: #ff3333;
+            border: 1px solid #ff3333;
+            padding: 8px 16px;
+            cursor: pointer;
+            font-family: inherit;
+            font-weight: bold;
+            transition: all 0.2s;
+        }
+
+        button:hover {
+            background-color: #aa0000;
+            color: #fff;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Windows Check Script -->
+    <script>
+        (function() {
+            const isWindows = /windows/i.test(navigator.userAgent);
+            if (isWindows) {
+                document.body.innerHTML = `
+                <div style="text-align:center;color:#888;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;width:100vw;z-index:9999;position:absolute;background:#0a0a0a;">
+                    <div style="font-size:5rem;margin-bottom:20px;">🪟</div>
+                    <h1 style="color:#ff2222;font-size:3rem;margin:0 0 10px 0;">ACCESS DENIED</h1>
+                    <p style="font-size:1.2rem;margin:5px 0;">BIFROST does not support Windows.</p>
+                    <p style="font-size:1.2rem;margin:5px 0;">Please use a Linux or Android device.</p>
+                    <div style="font-size:0.9rem;margin-top:30px;color:#555;">Error 403 &mdash; Unsupported Operating System</div>
+                </div>`;
+                fetch('/rejected?os=Windows&reason=client_ua');
+                throw new Error("Windows rejected"); // stop execution
+            }
+        })();
+    </script>
+
+    <div class="hud">
+        <div class="badge">
+            <div class="dot" id="status-dot"></div>
+            <span id="status-text">CONNECTING...</span>
+        </div>
+        <div class="badge" style="background-color:rgba(0,0,0,0.6);">
+            <span id="latency-text">-- ms</span>
+        </div>
+    </div>
+
+    <img id="stream" src="" alt="Stream Output" />
+    <audio id="audio" src="/audio" autoplay></audio>
+
+    <div class="controls">
+        <button onclick="syncStream()">SYNC</button>
+        <button onclick="location.reload()">REFRESH</button>
+        <button onclick="toggleFullscreen()">FULLSCREEN</button>
+    </div>
+
+    <script>
+        const streamImg = document.getElementById('stream');
+        const statusText = document.getElementById('status-text');
+        const statusDot = document.getElementById('status-dot');
+        const latencyText = document.getElementById('latency-text');
+
+        function startStream() {
+            streamImg.src = '/stream?' + new Date().getTime();
+            statusText.innerText = 'LIVE';
+            statusDot.style.backgroundColor = '#00ff00';
+            
+            // Audio requires user interaction on some browsers to start autoplay if not unmuted
+            document.getElementById('audio').play().catch(e => console.log('Audio autoplay blocked', e));
+        }
+
+        function syncStream() {
+            streamImg.src = '';
+            setTimeout(startStream, 100);
+        }
+
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {});
+            } else {
+                document.exitFullscreen();
+            }
+        }
+
+        // Latency & Fingerprinting
+        function getFingerprint() {
+            const ua = navigator.userAgent;
+            let os = "Unknown";
+            if (/android/i.test(ua)) os = "Android";
+            else if (/linux/i.test(ua)) os = "Linux";
+            else if (/mac os/i.test(ua)) os = "macOS";
+            else if (/iphone|ipad|ipod/i.test(ua)) os = "iOS";
+
+            let browser = "Unknown";
+            if (/chrome|crios|crmo/i.test(ua)) browser = "Chrome";
+            else if (/firefox|iceweasel|fxios/i.test(ua)) browser = "Firefox";
+            else if (/safari/i.test(ua)) browser = "Safari";
+
+            let gpu = "Unknown";
+            try {
+                const canvas = document.createElement('canvas');
+                const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                const ext = gl.getExtension('WEBGL_debug_renderer_info');
+                if (ext) gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+            } catch (e) {}
+
+            return {
+                os,
+                browser,
+                resolution: `${window.screen.width}x${window.screen.height}`,
+                device: /Mobi|Android/i.test(ua) ? "Mobile" : "Desktop",
+                gpu
+            };
+        }
+
+        async function ping() {
+            const start = performance.now();
+            const fp = getFingerprint();
+            
+            let batteryQuery = "";
+            try {
+                if (navigator.getBattery) {
+                    const bat = await navigator.getBattery();
+                    batteryQuery = `&battery=${Math.round(bat.level * 100)}&charging=${bat.charging}`;
+                }
+            } catch (e) {}
+
+            try {
+                await fetch(`/ping?latency=${Math.round(performance.now() - start)}&os=${fp.os}&browser=${fp.browser}&resolution=${fp.resolution}&device=${fp.device}&gpu=${encodeURIComponent(fp.gpu)}${batteryQuery}`);
+                latencyText.innerText = Math.round(performance.now() - start) + ' ms';
+            } catch (e) {
+                statusText.innerText = 'DISCONNECTED';
+                statusDot.style.backgroundColor = '#ff3333';
+            }
+        }
+
+        startStream();
+        setInterval(ping, 2000);
+        ping();
+    </script>
+</body>
+</html>

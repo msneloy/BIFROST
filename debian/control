@@ -1,0 +1,8 @@
+Package: bifrost
+Version: 0.1.0
+Architecture: amd64
+Depends: ffmpeg, avahi-daemon, avahi-utils, pipewire
+Maintainer: BIFROST Project
+Description: Classroom screen broadcasting over LAN
+ BIFROST streams the teacher's desktop to student browsers
+ on the local network with near-zero latency.
