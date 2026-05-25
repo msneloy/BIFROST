@@ -36,7 +36,7 @@ const (
 	ClientTimeout    = 30 * time.Second
 	DashboardRefresh = 1 * time.Second
 
-	MDNSNamePrimary  = "mnkb"         // → mnkb.local
+	MDNSNamePrimary  = "bifrost"      // → bifrost.local
 )
 
 func getLocalIP() string {

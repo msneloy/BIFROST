@@ -31,26 +31,26 @@ func NewCapturer(fps int) *Capturer {
 	}
 }
 
-// Start begins screen capture. Under Wayland, it uses cosmic-screenshot. Under X11, it uses ffmpeg (X11 grab).
-// It streams MJPEG frames to the provided broadcaster.
+// Start begins screen capture.
+// Under Wayland/COSMIC: uses cosmic-screenshot for per-frame capture.
+// Under X11: uses ffmpeg x11grab for efficient MJPEG pipe capture.
+// Streams MJPEG frames to the provided broadcaster.
 func (c *Capturer) Start(broadcaster *stream.Broadcaster) error {
 	sessionType := os.Getenv("XDG_SESSION_TYPE")
 	waylandDisplay := os.Getenv("WAYLAND_DISPLAY")
 
-	// Check if running under Wayland
+	// Under Wayland, use cosmic-screenshot which works with the native display server
 	if sessionType == "wayland" || waylandDisplay != "" {
-		_, err := exec.LookPath("cosmic-screenshot")
-		if err == nil {
-			log.Println("Wayland session detected: Starting cosmic-screenshot capture loop")
+		if _, err := exec.LookPath("cosmic-screenshot"); err == nil {
+			log.Println("Wayland session detected: Using cosmic-screenshot capture")
 			return c.startWaylandCapture(broadcaster)
 		}
-		log.Println("WARN: Wayland session detected but cosmic-screenshot not found. Falling back to X11 grab.")
+		log.Println("WARN: Wayland session but no cosmic-screenshot found. Trying X11 grab.")
 	}
 
 	display := os.Getenv("DISPLAY")
 	if display == "" {
-		log.Println("WARN: DISPLAY not set, falling back to :1")
-		display = ":1"
+		display = ":0"
 	}
 	log.Printf("Capturing display: %s", display)
 
@@ -89,6 +89,8 @@ func (c *Capturer) Start(broadcaster *stream.Broadcaster) error {
 	// Parse MJPEG frames from stdout and publish them
 	go func() {
 		defer cmd.Wait()
+		frameCount := 0
+		totalBytes := int64(0)
 		scanner := bufio.NewScanner(stdout)
 		buf := make([]byte, 1024*1024)
 		scanner.Buffer(buf, 20*1024*1024)
@@ -111,8 +113,14 @@ func (c *Capturer) Start(broadcaster *stream.Broadcaster) error {
 		})
 		for scanner.Scan() {
 			frame := scanner.Bytes()
+			if frameCount == 0 {
+				log.Printf("First frame: %d bytes", len(frame))
+			}
+			frameCount++
+			totalBytes += int64(len(frame))
 			broadcaster.Publish(frame)
 		}
+		log.Printf("Capture stats: %d frames, %d total bytes", frameCount, totalBytes)
 		if err := scanner.Err(); err != nil {
 			log.Println("Capture scanner error:", err)
 		}
