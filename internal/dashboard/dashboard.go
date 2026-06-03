@@ -17,9 +17,44 @@ import (
 
 func bar(pct float64, width int) string {
 	filled := int(math.Round(pct / 100.0 * float64(width)))
-	if filled < 0 { filled = 0 }
-	if filled > width { filled = width }
+	if filled < 0 {
+		filled = 0
+	}
+	if filled > width {
+		filled = width
+	}
 	return strings.Repeat("█", filled) + strings.Repeat("░", width-filled)
+}
+
+const dashboardInnerWidth = 66
+
+var startTime = time.Now()
+
+func padRight(value string, width int) string {
+	if len(value) > width {
+		return value[:width]
+	}
+	return fmt.Sprintf("%-*s", width, value)
+}
+
+func boxTop() string {
+	return fmt.Sprintf("\033[38;5;196m╭%s╮\033[0m\n", strings.Repeat("─", dashboardInnerWidth))
+}
+
+func boxBottom() string {
+	return fmt.Sprintf("\033[38;5;196m╰%s╯\033[0m\n", strings.Repeat("─", dashboardInnerWidth))
+}
+
+func boxRow(content string) string {
+	return fmt.Sprintf("\033[38;5;196m│\033[0m %s \033[38;5;196m│\033[0m\n", padRight(content, dashboardInnerWidth-2))
+}
+
+func boxSeparator() string {
+	return fmt.Sprintf("\033[38;5;196m│%s│\033[0m\n", strings.Repeat("─", dashboardInnerWidth))
+}
+
+func boxFooter(content string) string {
+	return fmt.Sprintf("\033[48;5;232;38;5;196m│\033[0m %s \033[48;5;232;38;5;196m│\033[0m\n", padRight(content, dashboardInnerWidth-2))
 }
 
 func readLine(path string) string {
@@ -32,28 +67,28 @@ func readLine(path string) string {
 
 // System stats gathering
 type SysStats struct {
-	CPUUsage   float64
-	CPUFreq    string
-	CPUTemp    string
-	RAMPct     float64
-	RAMUsed    float64
-	RAMTotal   float64
-	SwapPct    float64
-	SwapUsed   float64
-	SwapTotal  float64
-	DiskPct    float64
-	DiskTotal  float64
-	DiskR      float64
-	DiskW      float64
-	GPUFreq    string
-	GPUTemp    string
-	FanRPM     string
-	PCHTemp    string
-	NICFace    string
-	NICSpeed   string
-	NICType    string
-	BatPct     string
-	BatETA     string
+	CPUUsage  float64
+	CPUFreq   string
+	CPUTemp   string
+	RAMPct    float64
+	RAMUsed   float64
+	RAMTotal  float64
+	SwapPct   float64
+	SwapUsed  float64
+	SwapTotal float64
+	DiskPct   float64
+	DiskTotal float64
+	DiskR     float64
+	DiskW     float64
+	GPUFreq   string
+	GPUTemp   string
+	FanRPM    string
+	PCHTemp   string
+	NICFace   string
+	NICSpeed  string
+	NICType   string
+	BatPct    string
+	BatETA    string
 }
 
 func GetSysStats(prev *SysStats) *SysStats {
@@ -64,10 +99,10 @@ func GetSysStats(prev *SysStats) *SysStats {
 	if parts := strings.Fields(loadavg); len(parts) > 0 {
 		if load, err := strconv.ParseFloat(parts[0], 64); err == nil {
 			// rough approximation, assumes 8 cores for % display
-			stats.CPUUsage = math.Min(load/8.0*100.0, 100.0) 
+			stats.CPUUsage = math.Min(load/8.0*100.0, 100.0)
 		}
 	}
-	
+
 	// CPU Freq
 	cpuinfo, _ := ioutil.ReadFile("/proc/cpuinfo")
 	for _, line := range strings.Split(string(cpuinfo), "\n") {
@@ -112,10 +147,14 @@ func GetSysStats(prev *SysStats) *SysStats {
 		if len(fields) >= 2 {
 			val, _ := strconv.ParseFloat(fields[1], 64)
 			switch fields[0] {
-			case "MemTotal:": memTotal = val
-			case "MemAvailable:": memAvailable = val
-			case "SwapTotal:": swapTotal = val
-			case "SwapFree:": swapFree = val
+			case "MemTotal:":
+				memTotal = val
+			case "MemAvailable:":
+				memAvailable = val
+			case "SwapTotal:":
+				swapTotal = val
+			case "SwapFree:":
+				swapFree = val
 			}
 		}
 	}
@@ -183,40 +222,40 @@ func GetSysStats(prev *SysStats) *SysStats {
 
 func Render(tr *tracker.Tracker, primaryURL, fallbackURL, ipURL string, version string) {
 	fmt.Print("\033[?25l") // Hide cursor
-	
+
 	var prevStats *SysStats
-	
+
 	for {
 		stats := GetSysStats(prevStats)
 		prevStats = stats
-		
+
 		var out strings.Builder
 		out.WriteString("\033[H") // Home
 
 		// Header
-		out.WriteString("\033[38;5;196m╭─────────────────────────────────────────────────────────────╮\033[0m\n")
-		out.WriteString("\033[38;5;196m│\033[0m \033[1;31m ██████╗ ██╗███████╗██████╗  ██████╗ ███████╗████████╗\033[0m     \033[38;5;196m│\033[0m\n")
-		out.WriteString("\033[38;5;196m│\033[0m \033[1;31m ██╔══██╗██║██╔════╝██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝\033[0m     \033[38;5;196m│\033[0m\n")
-		out.WriteString("\033[38;5;196m│\033[0m \033[1;31m ██████╔╝██║█████╗  ██████╔╝██║   ██║███████╗   ██║   \033[0m     \033[38;5;196m│\033[0m\n")
-		out.WriteString("\033[38;5;196m│\033[0m \033[1;31m ██╔══██╗██║██╔══╝  ██╔══██╗██║   ██║╚════██║   ██║   \033[0m     \033[38;5;196m│\033[0m\n")
-		out.WriteString("\033[38;5;196m│\033[0m \033[1;31m ██████╔╝██║██║     ██║  ██║╚██████╔╝███████║   ██║   \033[0m     \033[38;5;196m│\033[0m\n")
-		out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m  v%-6s │ %-38s [%s] \033[38;5;196m│\033[0m\n", version, primaryURL, time.Now().Format("15:04:05")))
-		out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m           │ %-34s (direct IP)  \033[38;5;196m│\033[0m\n", ipURL))
+		out.WriteString(boxTop())
+		out.WriteString(boxRow(fmt.Sprintf("BIFROST v%s", version)))
+		out.WriteString(boxRow("Browser Integrated Feed for Remote Observation"))
+		out.WriteString(boxRow("& Screen Transmission"))
+		out.WriteString(boxRow(primaryURL))
+		out.WriteString(boxRow(ipURL + " (direct IP)"))
 		if fallbackURL != "" {
-			out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m           │ %-34s (fallback)  \033[38;5;196m│\033[0m\n", fallbackURL))
+			out.WriteString(boxRow(fallbackURL + " (fallback)"))
 		}
-		out.WriteString("\033[38;5;196m╰─────────────────────────────────────────────────────────────╯\033[0m\n")
+		out.WriteString(boxBottom())
 
 		// System
-		out.WriteString("\033[38;5;196m╭── SYSTEM ───────────────────────────────────────────────────╮\033[0m\n")
-		out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m  CPU: %s %3.0f%% %-6s %-6s  RAM:  %s %.1f/%.1fG  \033[38;5;196m│\033[0m\n", bar(stats.CPUUsage, 10), stats.CPUUsage, stats.CPUFreq, stats.CPUTemp, bar(stats.RAMPct, 10), stats.RAMUsed, stats.RAMTotal))
-		out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m  GPU: %s %-6s %-6s      DISK: %s %.0fG R/W  \033[38;5;196m│\033[0m\n", bar(0, 10), stats.GPUFreq, stats.GPUTemp, bar(stats.DiskPct, 10), stats.DiskTotal))
-		out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m  FAN: %s %-12s   SWAP: %s %.1fG      \033[38;5;196m│\033[0m\n", bar(0, 10), stats.FanRPM, bar(stats.SwapPct, 10), stats.SwapTotal))
-		out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m  NIC: %-6s %-6s %-8s  BAT:  %-4s %-8s       \033[38;5;196m│\033[0m\n", stats.NICFace, stats.NICSpeed, stats.NICType, stats.BatPct, stats.BatETA))
-		out.WriteString("\033[38;5;196m╰─────────────────────────────────────────────────────────────╯\033[0m\n")
+		out.WriteString(boxTop())
+		out.WriteString(boxRow("SYSTEM"))
+		out.WriteString(boxRow(fmt.Sprintf("CPU: %s %3.0f%%  %6s  %5s", bar(stats.CPUUsage, 10), stats.CPUUsage, stats.CPUFreq, stats.CPUTemp)))
+		out.WriteString(boxRow(fmt.Sprintf("RAM: %s %5.1f/%4.1fG  SWAP: %s %5.1fG", bar(stats.RAMPct, 10), stats.RAMUsed, stats.RAMTotal, bar(stats.SwapPct, 10), stats.SwapTotal)))
+		out.WriteString(boxRow(fmt.Sprintf("GPU: %-8s %5s  DISK: %s %5.0fG", emptyIfBlank(stats.GPUFreq, "--"), emptyIfBlank(stats.GPUTemp, "--"), bar(stats.DiskPct, 18), stats.DiskTotal)))
+		out.WriteString(boxRow(fmt.Sprintf("NIC: %-6s %-12s %-8s  FAN: %-12s", emptyIfBlank(stats.NICFace, "--"), emptyIfBlank(stats.NICSpeed, "--"), emptyIfBlank(stats.NICType, "--"), emptyIfBlank(stats.FanRPM, "--"))))
+		out.WriteString(boxRow(fmt.Sprintf("BAT: %-5s  %s", emptyIfBlank(stats.BatPct, "--"), emptyIfBlank(stats.BatETA, "--"))))
+		out.WriteString(boxBottom())
 
 		tr.RLock()
-		
+
 		var clients []*tracker.ClientInfo
 		activeCount := 0
 		var totalBandwidth float64
@@ -226,54 +265,67 @@ func Render(tr *tracker.Tracker, primaryURL, fallbackURL, ipURL string, version 
 			}
 			clients = append(clients, c)
 		}
-		
+
 		sort.Slice(clients, func(i, j int) bool {
 			return clients[i].LastSeen.After(clients[j].LastSeen)
 		})
 
-		out.WriteString(fmt.Sprintf("\033[38;5;196m╭── STUDENT STREAM MONITORING (%2d active) ───────────────────╮\033[0m\n", activeCount))
-		out.WriteString("\033[38;5;196m│\033[0m \033[1;37mS\033[0m \033[38;5;196m│\033[0m \033[1;37m#\033[0m \033[38;5;196m│\033[0m \033[1;37mDEV\033[0m \033[38;5;196m│\033[0m \033[1;37mIP ADDRESS    \033[0m \033[38;5;196m│\033[0m \033[1;37mBANDWIDTH      \033[0m \033[38;5;196m│\033[0m \033[1;37mUPLINK  \033[0m \033[38;5;196m│\033[0m\n")
+		out.WriteString(boxTop())
+		out.WriteString(boxRow(fmt.Sprintf("STUDENT STREAM MONITORING (%d active)", activeCount)))
+		out.WriteString(boxRow("S  #  DEV  IP ADDRESS       BANDWIDTH     UPLINK"))
 
-		for i := 0; i < len(clients) && i < 20; i++ {
-			c := clients[i]
-			
-			status := "\033[90m○\033[0m"
-			if c.Active { status = "\033[92m●\033[0m" }
+		if len(clients) == 0 {
+			out.WriteString(boxRow("No active clients"))
+		} else {
+			for i := 0; i < len(clients) && i < 20; i++ {
+				c := clients[i]
 
-			dev := "💻"
-			if strings.Contains(strings.ToLower(c.DevType), "mobile") || strings.Contains(strings.ToLower(c.OS), "android") {
-				dev = "📱"
+				// Use plain ASCII symbols for alignment (avoid ANSI/emoji in padded content)
+				status := "o"
+				if c.Active {
+					status = "*"
+				}
+
+				dev := "PC"
+				if strings.Contains(strings.ToLower(c.DevType), "mobile") || strings.Contains(strings.ToLower(c.OS), "android") {
+					dev = "MB"
+				}
+
+				bw := float64(c.Bytes-c.PrevBytes) / 1024.0 / 1024.0 // MB/s
+				c.PrevBytes = c.Bytes
+				totalBandwidth += bw
+				uplink := float64(c.Bytes) / 1024.0 / 1024.0 // MB
+
+				row := fmt.Sprintf("%s %2d  %-3s %-15s %9s %8s",
+					status, i+1, dev, c.IP, fmt.Sprintf("%5.1fMB/s", bw), fmt.Sprintf("%6.1fMB", uplink))
+				out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m %s \033[38;5;196m│\033[0m\n", padRight(row, dashboardInnerWidth-2)))
 			}
-
-			bw := float64(c.Bytes - c.PrevBytes) / 1024.0 / 1024.0 // MB/s
-			c.PrevBytes = c.Bytes
-			totalBandwidth += bw
-			
-			bwBar := bar(math.Min(bw/10.0*100.0, 100), 7)
-			
-			uplink := float64(c.Bytes) / 1024.0 / 1024.0 // MB
-
-			bg := ""
-			if i%2 == 1 { bg = "\033[48;5;233m" }
-
-			out.WriteString(fmt.Sprintf("%s\033[38;5;196m│\033[0m %s \033[38;5;196m│\033[0m %-1d \033[38;5;196m│\033[0m %s  \033[38;5;196m│\033[0m %-14s \033[38;5;196m│\033[0m %s %4.1fM/s \033[38;5;196m│\033[0m %6.1fM \033[38;5;196m│\033[0m\n", bg, status, i+1, dev, c.IP, bwBar, bw, uplink))
 		}
 
-		out.WriteString("\033[38;5;196m│ ──────────────────────────────────────────────────────────  │\033[0m\n")
-		
+		out.WriteString(boxSeparator())
 		totalMB := float64(tr.TotalBytes) / 1024.0 / 1024.0
-		out.WriteString(fmt.Sprintf("\033[1;48;5;232;38;5;196m│ Σ │   │     │                │ %s %4.1fM/s │ %6.1fM │\033[0m\n", bar(math.Min(totalBandwidth/50.0*100, 100), 7), totalBandwidth, totalMB))
-		out.WriteString("\033[38;5;196m╰─────────────────────────────────────────────────────────────╯\033[0m\n")
+		out.WriteString(boxRow(fmt.Sprintf("Σ       %9s %8s", fmt.Sprintf("%5.1fMB/s", totalBandwidth), fmt.Sprintf("%6.1fMB", totalMB))))
+		out.WriteString(boxBottom())
 
 		if len(tr.Rejections) > 0 {
-			out.WriteString("\033[38;5;196m╭── REJECTED CLIENTS ─────────────────────────────────────────╮\033[0m\n")
+			out.WriteString(fmt.Sprintf("\033[38;5;196m╭── REJECTED CLIENTS %s╮\033[0m\n", strings.Repeat("─", dashboardInnerWidth-18)))
 			for _, r := range tr.Rejections {
-				out.WriteString(fmt.Sprintf("\033[38;5;196m│\033[0m ⛔ \033[38;5;196m│\033[0m \033[38;5;196m%-14s\033[0m \033[38;5;196m│\033[0m \033[38;5;196m%-21s\033[0m \033[38;5;196m│\033[0m \033[38;5;196m%s\033[0m       \033[38;5;196m│\033[0m\n", r.IP, r.Reason, r.Time.Format("15:04:05")))
+				out.WriteString(boxRow(fmt.Sprintf("⛔ %-15s %-22s %s", r.IP, r.Reason, r.Time.Format("15:04:05"))))
 			}
-			out.WriteString("\033[38;5;196m╰─────────────────────────────────────────────────────────────╯\033[0m\n")
+			out.WriteString(boxBottom())
 		}
 
 		tr.RUnlock()
+
+		// Footer/status line — uptime, active clients, total MB, log size
+		uptime := time.Since(startTime).Truncate(time.Second)
+		// log file info
+		logInfo := "no log"
+		if fi, err := os.Stat("/tmp/bifrost.log"); err == nil {
+			logInfo = fmt.Sprintf("log:%dKB", fi.Size()/1024)
+		}
+		footer := fmt.Sprintf("Up:%s  Clients:%d  Total:%s  %s  %s", uptime.String(), activeCount, fmt.Sprintf("%6.1fMB", totalMB), logInfo, time.Now().Format("15:04:05"))
+		out.WriteString(boxFooter(footer))
 
 		// Clear rest of screen
 		out.WriteString("\033[J")
@@ -281,6 +333,13 @@ func Render(tr *tracker.Tracker, primaryURL, fallbackURL, ipURL string, version 
 
 		time.Sleep(1 * time.Second)
 	}
+}
+
+func emptyIfBlank(value, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func ClearScreen() {

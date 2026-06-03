@@ -36,7 +36,7 @@ const (
 	ClientTimeout    = 30 * time.Second
 	DashboardRefresh = 1 * time.Second
 
-	MDNSNamePrimary  = "bifrost"      // → bifrost.local
+	MDNSNamePrimary = "bifrost" // → bifrost.local
 )
 
 func getLocalIP() string {
@@ -121,6 +121,9 @@ func main() {
 		if err := srv.ListenAndServe(); err != nil {
 			if strings.Contains(err.Error(), "permission denied") {
 				log.Fatalf("Server error: %v\n\n[TIP] Port 80 is a privileged port on Linux. Please run BIFROST with sudo:\n      sudo ./bifrost\n\n", err)
+			}
+			if strings.Contains(err.Error(), "address already in use") {
+				log.Fatalf("Server error: %v\n\n[TIP] Port %d is already in use. Stop the existing BIFROST process or use watch.sh to restart cleanly.\n", err, StreamPort)
 			}
 			log.Fatalf("Server error: %v", err)
 		}
