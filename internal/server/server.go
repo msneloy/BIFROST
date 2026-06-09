@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"log"
 )
 
 type trackingResponseWriter struct {
@@ -60,21 +61,21 @@ func New(
 		}
 	}
 
-	mux.HandleFunc("/", guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", recoverMiddleware(guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(viewerHTML))
-	})))
+	}))))
 
-	mux.HandleFunc("/stream", guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/stream", recoverMiddleware(guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
 		w.Header().Set("Cache-Control", "no-cache, private")
 		w.Header().Set("Pragma", "no-cache")
 		
-		ch := videoStream.Subscribe()
+		ch := videoStream.Subscribe(2)
 		defer videoStream.Unsubscribe(ch)
 
 		flusher, ok := w.(http.Flusher)
@@ -87,22 +88,34 @@ func New(
 			select {
 			case <-r.Context().Done():
 				return
-			case frame := <-ch:
+			case frame, ok := <-ch:
+				if !ok {
+					return
+				}
 				header := fmt.Sprintf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame))
-				w.Write([]byte(header))
-				w.Write(frame)
-				w.Write([]byte("\r\n"))
+				if _, err := w.Write([]byte(header)); err != nil {
+					log.Println("write header error:", err)
+					return
+				}
+				if _, err := w.Write(frame); err != nil {
+					log.Println("write frame error:", err)
+					return
+				}
+				if _, err := w.Write([]byte("\r\n")); err != nil {
+					log.Println("write newline error:", err)
+					return
+				}
 				flusher.Flush()
 			}
 		}
-	})))
+	}))))
 
-	mux.HandleFunc("/audio", guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/audio", recoverMiddleware(guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "audio/mpeg")
 		w.Header().Set("Transfer-Encoding", "chunked")
 		w.Header().Set("Cache-Control", "no-cache")
 
-		ch := audioStream.Subscribe()
+		ch := audioStream.Subscribe(50)
 		defer audioStream.Unsubscribe(ch)
 
 		flusher, ok := w.(http.Flusher)
@@ -118,9 +131,9 @@ func New(
 				}
 			}
 		}
-	})))
+	}))))
 
-	mux.HandleFunc("/ping", trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ping", recoverMiddleware(trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
 		client := tr.GetClient(ip)
 		
@@ -137,18 +150,18 @@ func New(
 		if charging := q.Get("charging"); charging != "" { client.Charging = (charging == "true") }
 		
 		w.WriteHeader(http.StatusOK)
-	}))
+	})))
 
-	mux.HandleFunc("/rejected", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/rejected", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
 		os := r.URL.Query().Get("os")
 		reason := r.URL.Query().Get("reason")
 		ua := r.Header.Get("User-Agent")
 		tr.LogRejection(ip, os, reason, ua)
 		w.WriteHeader(http.StatusOK)
-	})
+	}))
 
-	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/health", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		tr.RLock()
 		activeClients := 0
 		for _, c := range tr.Clients {
@@ -164,7 +177,7 @@ func New(
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(res)
-	})
+	}))
 
 	return &http.Server{
 		Handler: mux,
@@ -176,4 +189,17 @@ func New(
 			}
 		},
 	}
+}
+
+// recoverMiddleware wraps an http.HandlerFunc to recover from panics and log them.
+func recoverMiddleware(next http.HandlerFunc) http.HandlerFunc {
+    return func(w http.ResponseWriter, r *http.Request) {
+        defer func() {
+            if err := recover(); err != nil {
+                log.Printf("panic recovered in handler: %v", err)
+                http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+            }
+        }()
+        next(w, r)
+    }
 }

@@ -13,10 +13,10 @@ func NewBroadcaster() *Broadcaster {
 	}
 }
 
-func (b *Broadcaster) Subscribe() chan []byte {
+func (b *Broadcaster) Subscribe(bufferSize int) chan []byte {
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	ch := make(chan []byte, 30) // Buffer size
+	ch := make(chan []byte, bufferSize)
 	b.clients[ch] = struct{}{}
 	return ch
 }

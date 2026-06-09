@@ -151,8 +151,9 @@
       const statusDot = document.getElementById("status-dot");
       const latencyText = document.getElementById("latency-text");
 
-      let reconnectTimer = null;
-      const reconnectDelay = 2000;
+      let isAlive = false;
+      let isStreamRunning = false;
+      let connectingStartedAt = null;
 
       function setStatus(text, color) {
         statusText.innerText = text;
@@ -160,28 +161,30 @@
       }
 
       function startStream() {
-        streamImg.src = "/stream?cache-bust=" + Date.now();
-        setStatus("CONNECTING...", "#ffcc00");
+        const bust = Date.now();
+        streamImg.src = "/stream?cache-bust=" + bust;
+        
+        const audio = document.getElementById("audio");
+        audio.src = "/audio?cache-bust=" + bust;
+        audio.load();
+        audio.play().catch((e) => console.log("Audio autoplay blocked", e));
 
-        // Audio requires user interaction on some browsers to start autoplay if not unmuted
-        document
-          .getElementById("audio")
-          .play()
-          .catch((e) => console.log("Audio autoplay blocked", e));
+        setStatus("CONNECTING...", "#ffcc00");
+        isStreamRunning = true;
+        connectingStartedAt = Date.now();
       }
 
-      function scheduleReconnect() {
-        if (reconnectTimer) {
-          return;
-        }
-        reconnectTimer = setTimeout(() => {
-          reconnectTimer = null;
-          syncStream();
-        }, reconnectDelay);
+      function stopStream() {
+        streamImg.src = "about:blank";
+        const audio = document.getElementById("audio");
+        audio.src = "";
+        audio.load();
+        isStreamRunning = false;
+        connectingStartedAt = null;
       }
 
       function syncStream() {
-        streamImg.src = "about:blank";
+        stopStream();
         setStatus("RECONNECTING...", "#ff9900");
         setTimeout(startStream, 100);
       }
@@ -244,19 +247,37 @@
             `/ping?latency=${Math.round(performance.now() - start)}&os=${fp.os}&browser=${fp.browser}&resolution=${fp.resolution}&device=${fp.device}&gpu=${encodeURIComponent(fp.gpu)}${batteryQuery}`,
           );
           latencyText.innerText = Math.round(performance.now() - start) + " ms";
+          
+          isAlive = true;
+          // Reconnect stream if it wasn't running
+          if (!isStreamRunning) {
+            startStream();
+          } else if (connectingStartedAt && (Date.now() - connectingStartedAt > 5000)) {
+            // Stalled in connecting state for too long (e.g. browser backgrounding or stalled connection)
+            console.log("Stream stalled in connecting state, reconnecting...");
+            syncStream();
+          }
         } catch (e) {
+          isAlive = false;
           setStatus("DISCONNECTED", "#ff3333");
-          scheduleReconnect();
+          if (isStreamRunning) {
+            stopStream();
+          }
         }
       }
 
       streamImg.addEventListener("load", () => {
         setStatus("LIVE", "#00ff00");
+        connectingStartedAt = null;
       });
 
       streamImg.addEventListener("error", () => {
-        setStatus("DISCONNECTED", "#ff3333");
-        scheduleReconnect();
+        if (isAlive) {
+          syncStream();
+        } else {
+          setStatus("DISCONNECTED", "#ff3333");
+          stopStream();
+        }
       });
 
       startStream();

@@ -8,6 +8,7 @@ import (
 	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
 	"bifrost/web"
+	"bifrost/internal/watcher"
 	"fmt"
 	"log"
 	"net"
@@ -29,8 +30,8 @@ const (
 	AppName          = "BIFROST"
 	AppVersion       = "0.1.0"
 	StreamPort       = 8080
-	StreamFPS        = 30
-	JPEGQuality      = 80
+	StreamFPS        = 10
+	JPEGQuality      = 40
 	MaxClientRows    = 20
 	MaxRejectedRows  = 5
 	ClientTimeout    = 30 * time.Second
@@ -68,6 +69,15 @@ func main() {
 	fmt.Printf("Primary URL:   %s\n", primaryURL)
 	fmt.Printf("Direct IP URL: %s\n", directIPURL)
 
+	// 1.5 Start code watcher if running in development environment
+	if _, err := exec.LookPath("go"); err == nil {
+		if _, err1 := os.Stat("cmd"); err1 == nil {
+			if _, err2 := os.Stat("internal"); err2 == nil {
+				watcher.Start([]string{"cmd", "internal", "web"}, []string{"go", "build", "-o", "bifrost", "./cmd/bifrost"})
+			}
+		}
+	}
+
 	// 2. Kill orphan processes
 	exec.Command("pkill", "-9", "ffmpeg").Run()
 	exec.Command("pkill", "-9", "gst-launch-1.0").Run()
@@ -99,7 +109,7 @@ func main() {
 	}
 
 	// 7. Screen capture
-	capturer := capture.NewCapturer(StreamFPS)
+	capturer := capture.NewCapturer(StreamFPS, JPEGQuality)
 	if err := capturer.Start(videoStream); err != nil {
 		log.Fatalf("Failed to start screen capture: %v", err)
 	}

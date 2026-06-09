@@ -3,6 +3,7 @@ package capture
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"image"
 	"image/jpeg"
@@ -19,15 +20,17 @@ import (
 )
 
 type Capturer struct {
-	fps  int
-	cmd  *exec.Cmd
-	done chan struct{}
+	fps     int
+	quality int
+	cmd     *exec.Cmd
+	done    chan struct{}
 }
 
-func NewCapturer(fps int) *Capturer {
+func NewCapturer(fps int, quality int) *Capturer {
 	return &Capturer{
-		fps:  fps,
-		done: make(chan struct{}),
+		fps:     fps,
+		quality: quality,
+		done:    make(chan struct{}),
 	}
 }
 
@@ -54,16 +57,25 @@ func (c *Capturer) Start(broadcaster *stream.Broadcaster) error {
 	}
 	log.Printf("Capturing display: %s", display)
 
+	qscale := (100 - c.quality) * 30 / 100
+	if qscale < 1 {
+		qscale = 1
+	} else if qscale > 31 {
+		qscale = 31
+	}
+
 	cmd := exec.Command("ffmpeg",
+		"-fflags", "nobuffer",
+		"-flags", "low_delay",
 		"-f", "x11grab",
 		"-framerate", strconv.Itoa(c.fps),
 		"-i", display,
-		"-q:v", "5",
+		"-q:v", strconv.Itoa(qscale),
 		"-f", "image2pipe",
 		"-vcodec", "mjpeg",
 		"pipe:1",
 	)
-	log.Printf("ffmpeg cmd: %v", cmd.Args)
+	log.Printf("ffmpeg cmd (qscale: %d): %v", qscale, cmd.Args)
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
@@ -141,16 +153,20 @@ func (c *Capturer) startWaylandCapture(broadcaster *stream.Broadcaster) error {
 				return
 			default:
 				start := time.Now()
-				cmd := exec.Command("cosmic-screenshot", "--interactive=false", "--notify=false", "-s", "/dev/shm")
+				ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+				cmd := exec.CommandContext(ctx, "cosmic-screenshot", "--interactive=false", "--notify=false", "-s", "/dev/shm")
 				out, err := cmd.Output()
+				cancel()
 				if err != nil {
-					log.Printf("cosmic-screenshot failed: %v", err)
-					time.Sleep(100 * time.Millisecond)
+					log.Printf("cosmic-screenshot failed or timed out: %v", err)
+					// Backoff sleep on failure to prevent DBus/portal flooding
+					time.Sleep(500 * time.Millisecond)
 					continue
 				}
 
 				filePath := strings.TrimSpace(string(out))
 				if filePath == "" {
+					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 
@@ -178,7 +194,7 @@ func (c *Capturer) startWaylandCapture(broadcaster *stream.Broadcaster) error {
 				}
 
 				var buf bytes.Buffer
-				err = jpeg.Encode(&buf, croppedImg, &jpeg.Options{Quality: 80})
+				err = jpeg.Encode(&buf, croppedImg, &jpeg.Options{Quality: c.quality})
 				if err != nil {
 					log.Printf("Failed to encode JPEG: %v", err)
 					continue
