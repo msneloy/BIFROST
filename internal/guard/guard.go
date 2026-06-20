@@ -2,20 +2,21 @@ package guard
 
 import (
 	"bifrost/internal/tracker"
+	"fmt"
 	"net/http"
 	"strings"
 )
 
-const windowsRejectionPage = `<!DOCTYPE html>
-<html lang="en">
+const windowsRejectionHTML = `
+<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <title>BIFROST - Access Denied</title>
+    <title>ACCESS DENIED</title>
     <style>
         body {
-            background-color: #0a0a0a;
-            color: #888;
-            font-family: monospace;
+            background: #0a0a0a;
+            color: #ff2222;
+            font-family: 'Courier New', Courier, monospace;
             display: flex;
             flex-direction: column;
             align-items: center;
@@ -24,47 +25,31 @@ const windowsRejectionPage = `<!DOCTYPE html>
             margin: 0;
             text-align: center;
         }
-        .emoji {
-            font-size: 5rem;
-            margin-bottom: 20px;
-        }
-        h1 {
-            color: #ff2222;
-            font-size: 3rem;
-            margin: 0 0 10px 0;
-        }
-        p {
-            font-size: 1.2rem;
-            margin: 5px 0;
-        }
-        .error-code {
-            font-size: 0.9rem;
-            margin-top: 30px;
-            color: #555;
-        }
+        .icon { font-size: 80px; margin-bottom: 20px; }
+        .title { font-size: 28px; font-weight: bold; margin-bottom: 10px; }
+        .msg { font-size: 14px; color: #888; margin-bottom: 30px; line-height: 1.5; }
+        .error { font-size: 11px; color: #333; border: 1px solid #222; padding: 10px 20px; }
     </style>
 </head>
 <body>
-    <div class="emoji">🪟</div>
-    <h1>ACCESS DENIED</h1>
-    <p>BIFROST does not support Windows.</p>
-    <p>Please use a Linux or Android device.</p>
-    <div class="error-code">Error 403 &mdash; Unsupported Operating System</div>
+    <div class="icon">🪟</div>
+    <div class="title">ACCESS DENIED</div>
+    <div class="msg">
+        BIFROST does not support Windows.<br/>
+        Please use a Linux or Android device.
+    </div>
+    <div class="error">Error 403 &mdash; Unsupported Operating System</div>
 </body>
-</html>`
+</html>
+`
 
-func RejectWindows(tracker *tracker.Tracker, next http.HandlerFunc) http.HandlerFunc {
+func RejectWindows(tr *tracker.Tracker, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ua := strings.ToLower(r.Header.Get("User-Agent"))
 		if strings.Contains(ua, "windows") {
-			ip := r.RemoteAddr
-			if idx := strings.LastIndex(ip, ":"); idx != -1 {
-				ip = ip[:idx]
-			}
-			tracker.LogRejection(ip, "Windows", "Windows UA detected", ua)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			tr.LogRejection(r.RemoteAddr, "Windows OS", "server_guard", ua)
 			w.WriteHeader(http.StatusForbidden)
-			w.Write([]byte(windowsRejectionPage))
+			fmt.Fprint(w, windowsRejectionHTML)
 			return
 		}
 		next(w, r)

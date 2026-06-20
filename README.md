@@ -84,6 +84,7 @@ go build -o bifrost ./cmd/bifrost
 ```
 
 On startup, BIFROST will:
+
 1. Display an ASCII art banner and connection URLs
 2. Kill any orphaned `ffmpeg` / `gst-launch-1.0` processes
 3. Detect your session type (X11 / Wayland)
@@ -110,6 +111,7 @@ Auto-rebuilds and restarts BIFROST whenever any `.go` or template file changes.
 ### Web Viewer
 
 The viewer at `/` provides:
+
 - **Live MJPEG video stream** — auto-updating via multipart response
 - **Audio stream** — MP3 audio played automatically
 - **HUD overlay** showing:
@@ -123,14 +125,14 @@ The viewer at `/` provides:
 
 ### HTTP Endpoints
 
-| Endpoint       | Method | Description                                          |
-|----------------|--------|------------------------------------------------------|
-| `/`            | GET    | Serves the web viewer HTML                           |
-| `/stream`      | GET    | MJPEG video stream (`multipart/x-mixed-replace`)     |
-| `/audio`       | GET    | MP3 audio stream (chunked transfer)                  |
-| `/ping`        | GET    | Client telemetry endpoint (latency, OS, browser, etc.)|
-| `/health`      | GET    | JSON health check (`{"streaming":true, "clients": N}`)|
-| `/rejected`    | GET    | Client-side Windows rejection logging endpoint       |
+| Endpoint    | Method | Description                                            |
+| ----------- | ------ | ------------------------------------------------------ |
+| `/`         | GET    | Serves the web viewer HTML                             |
+| `/stream`   | GET    | MJPEG video stream (`multipart/x-mixed-replace`)       |
+| `/audio`    | GET    | MP3 audio stream (chunked transfer)                    |
+| `/ping`     | GET    | Client telemetry endpoint (latency, OS, browser, etc.) |
+| `/health`   | GET    | JSON health check (`{"streaming":true, "clients": N}`) |
+| `/rejected` | GET    | Client-side Windows rejection logging endpoint         |
 
 ### Terminal Dashboard
 
@@ -154,9 +156,9 @@ The TUI dashboard refreshes every second and displays:
 ╰─────────────────────────────────────────────────────────────╯
 ╭── STUDENT STREAM MONITORING ( 3 active) ───────────────────╮
 │ S │ # │ DEV │ IP ADDRESS     │ BANDWIDTH      │ UPLINK     │
-│ ● │ 1 │ 📱  │ 192.168.1.50  │ ████░░░ 2.1M/s │   45.2M    │
-│ ● │ 2 │ 💻  │ 192.168.1.51  │ ██░░░░░ 1.5M/s │   32.1M    │
-│ ○ │ 3 │ 💻  │ 192.168.1.52  │ ░░░░░░░ 0.0M/s │   10.8M    │
+│ ● │ 1 │ 📱  │ 192.168.0.50  │ ████░░░ 2.1M/s │   45.2M    │
+│ ● │ 2 │ 💻  │ 192.168.0.51  │ ██░░░░░ 1.5M/s │   32.1M    │
+│ ○ │ 3 │ 💻  │ 192.168.0.52  │ ░░░░░░░ 0.0M/s │   10.8M    │
 │ ──────────────────────────────────────────────────────────  │
 │ Σ │   │     │                │ ██░░░░░ 3.6M/s │   88.1M    │
 ╰─────────────────────────────────────────────────────────────╯
@@ -198,6 +200,7 @@ The TUI dashboard refreshes every second and displays:
 ### [`cmd/bifrost/main.go`](cmd/bifrost/main.go)
 
 The application entry point that:
+
 - Displays the BIFROST ASCII art banner
 - Detects the local IP address
 - Kills orphaned `ffmpeg` / `gst-launch-1.0` processes
@@ -337,16 +340,16 @@ Development helper that:
 
 Key constants defined in [`cmd/bifrost/main.go`](cmd/bifrost/main.go:28):
 
-| Constant           | Default        | Description                              |
-|--------------------|----------------|------------------------------------------|
-| `StreamPort`       | `8080`         | HTTP server port                         |
-| `StreamFPS`        | `30`           | Target capture frame rate (X11 only)     |
-| `JPEGQuality`      | `80`           | JPEG encode quality (Wayland path)       |
-| `MaxClientRows`    | `20`           | Max clients shown in dashboard           |
-| `MaxRejectedRows`  | `5`            | Max rejection entries kept               |
-| `ClientTimeout`    | `30s`          | Seconds before marking client inactive   |
-| `DashboardRefresh` | `1s`           | Dashboard refresh interval               |
-| `MDNSNamePrimary`  | `"bifrost"`    | Primary mDNS hostname (→ `bifrost.local`) |
+| Constant           | Default     | Description                               |
+| ------------------ | ----------- | ----------------------------------------- |
+| `StreamPort`       | `8080`      | HTTP server port                          |
+| `StreamFPS`        | `30`        | Target capture frame rate (X11 only)      |
+| `JPEGQuality`      | `80`        | JPEG encode quality (Wayland path)        |
+| `MaxClientRows`    | `20`        | Max clients shown in dashboard            |
+| `MaxRejectedRows`  | `5`         | Max rejection entries kept                |
+| `ClientTimeout`    | `30s`       | Seconds before marking client inactive    |
+| `DashboardRefresh` | `1s`        | Dashboard refresh interval                |
+| `MDNSNamePrimary`  | `"bifrost"` | Primary mDNS hostname (→ `bifrost.local`) |
 
 ---
 
@@ -387,25 +390,27 @@ sudo /usr/local/bin/bifrost
 
 ## Client Requirements
 
-| Device    | Browser           | Status      |
-|-----------|-------------------|-------------|
-| Linux     | Chrome/Firefox    | ✅ Supported |
-| Android   | Chrome            | ✅ Supported |
-| macOS     | Safari/Chrome     | ⚠️ Untested |
-| iOS       | Safari            | ⚠️ Untested |
-| Windows   | Any               | ❌ Blocked   |
+| Device  | Browser        | Status       |
+| ------- | -------------- | ------------ |
+| Linux   | Chrome/Firefox | ✅ Supported |
+| Android | Chrome         | ✅ Supported |
+| macOS   | Safari/Chrome  | ⚠️ Untested  |
+| iOS     | Safari         | ⚠️ Untested  |
+| Windows | Any            | ❌ Blocked   |
 
 ---
 
 ## Dependencies
 
 ### Runtime
+
 - **ffmpeg** — Screen capture (X11) and audio capture via PulseAudio
 - **avahi-daemon / avahi-utils** — mDNS service publication
 - **PipeWire** — Audio subsystem dependency
 - **cosmic-screenshot** — Optional, for native Wayland/COSMIC capture
 
 ### Build
+
 - **Go 1.22+** — No external Go dependencies (stdlib only)
 
 ---

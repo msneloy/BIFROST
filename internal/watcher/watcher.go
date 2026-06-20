@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"time"
 )
@@ -83,10 +84,28 @@ func Start(dirs []string, buildCmd []string) {
 					continue
 				}
 
-				// syscall.Exec replaces the current process with the newly built binary
-				err = syscall.Exec(execPath, os.Args, os.Environ())
-				if err != nil {
-					log.Printf("[watcher] syscall.Exec failed: %v", err)
+				if runtime.GOOS != "windows" {
+					// On Unix, use syscall.Exec to replace the current process.
+					// This preserves the PID and terminal job control (Ctrl+C works).
+					log.Printf("[watcher] Performing syscall.Exec: %s", execPath)
+					err = syscall.Exec(execPath, os.Args, os.Environ())
+					if err != nil {
+						log.Printf("[watcher] syscall.Exec failed: %v", err)
+						continue
+					}
+				} else {
+					// Windows fallback (cannot use syscall.Exec)
+					newCmd := exec.Command(execPath, os.Args[1:]...)
+					newCmd.Stdout = os.Stdout
+					newCmd.Stderr = os.Stderr
+					newCmd.Stdin = os.Stdin
+					newCmd.Env = os.Environ()
+
+					if err := newCmd.Start(); err != nil {
+						log.Printf("[watcher] Failed to restart: %v", err)
+						continue
+					}
+					os.Exit(0)
 				}
 			}
 		}

@@ -1,37 +1,20 @@
 package server
 
 import (
-	"bifrost/internal/guard"
 	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
 	"encoding/json"
 	"fmt"
+	"io"
+	"log"
 	"net"
 	"net/http"
 	"strconv"
 	"strings"
-	"log"
+	"time"
 )
 
-type trackingResponseWriter struct {
-	http.ResponseWriter
-	tracker *tracker.Tracker
-	ip      string
-}
-
-func (w *trackingResponseWriter) Write(b []byte) (int, error) {
-	n, err := w.ResponseWriter.Write(b)
-	if n > 0 {
-		w.tracker.AddBytes(w.ip, int64(n))
-	}
-	return n, err
-}
-
-func (w *trackingResponseWriter) Flush() {
-	if flusher, ok := w.ResponseWriter.(http.Flusher); ok {
-		flusher.Flush()
-	}
-}
+var startTime = time.Now()
 
 func getIP(r *http.Request) string {
 	ip := r.RemoteAddr
@@ -43,40 +26,48 @@ func getIP(r *http.Request) string {
 
 func New(
 	tr *tracker.Tracker,
-	videoStream *stream.Broadcaster,
-	audioStream *stream.Broadcaster,
+	stream *stream.Broadcaster,
 	viewerHTML string,
 ) *http.Server {
 	mux := http.NewServeMux()
 
-	trackMiddleware := func(next http.HandlerFunc) http.HandlerFunc {
-		return func(w http.ResponseWriter, r *http.Request) {
-			ip := getIP(r)
-			tw := &trackingResponseWriter{
-				ResponseWriter: w,
-				tracker:        tr,
-				ip:             ip,
-			}
-			next(tw, r)
-		}
-	}
-
-	mux.HandleFunc("/", recoverMiddleware(guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
 			return
 		}
+
 		w.Header().Set("Content-Type", "text/html")
 		w.Write([]byte(viewerHTML))
-	}))))
+	}))
 
-	mux.HandleFunc("/stream", recoverMiddleware(guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+	mux.HandleFunc("/frame", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		ip := getIP(r)
+
+		frame := stream.GetLastFrame()
+		if frame == nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+
+		w.Header().Set("Content-Type", "image/jpeg")
+		w.Header().Set("Content-Length", strconv.Itoa(len(frame)))
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+
+		n, err := w.Write(frame)
+		if err == nil && n > 0 {
+			tr.AddBytes(ip, int64(n))
+		}
+	}))
+
+	mux.HandleFunc("/stream", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		ip := getIP(r)
+		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=boundary")
 		w.Header().Set("Cache-Control", "no-cache, private")
 		w.Header().Set("Pragma", "no-cache")
-		
-		ch := videoStream.Subscribe(2)
-		defer videoStream.Unsubscribe(ch)
+
+		ch := stream.Subscribe(100)
+		defer stream.Unsubscribe(ch)
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -88,69 +79,58 @@ func New(
 			select {
 			case <-r.Context().Done():
 				return
-			case frame, ok := <-ch:
+			case chunk, ok := <-ch:
 				if !ok {
 					return
 				}
-				header := fmt.Sprintf("--frame\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(frame))
-				if _, err := w.Write([]byte(header)); err != nil {
-					log.Println("write header error:", err)
-					return
-				}
-				if _, err := w.Write(frame); err != nil {
-					log.Println("write frame error:", err)
-					return
-				}
-				if _, err := w.Write([]byte("\r\n")); err != nil {
-					log.Println("write newline error:", err)
-					return
-				}
+				header := fmt.Sprintf("--boundary\r\nContent-Type: image/jpeg\r\nContent-Length: %d\r\n\r\n", len(chunk))
+				n1, _ := fmt.Fprint(w, header)
+				n2, _ := w.Write(chunk)
+				n3, _ := fmt.Fprint(w, "\r\n")
+
+				tr.AddBytes(ip, int64(n1+n2+n3))
 				flusher.Flush()
 			}
 		}
-	}))))
+	}))
 
-	mux.HandleFunc("/audio", recoverMiddleware(guard.RejectWindows(tr, trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "audio/mpeg")
-		w.Header().Set("Transfer-Encoding", "chunked")
-		w.Header().Set("Cache-Control", "no-cache")
+	// Audio endpoint is now redundant as it's muxed in /stream
+	mux.HandleFunc("/audio", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusGone)
+	})
 
-		ch := audioStream.Subscribe(50)
-		defer audioStream.Unsubscribe(ch)
-
-		flusher, ok := w.(http.Flusher)
-		
-		for {
-			select {
-			case <-r.Context().Done():
-				return
-			case chunk := <-ch:
-				w.Write(chunk)
-				if ok {
-					flusher.Flush()
-				}
-			}
-		}
-	}))))
-
-	mux.HandleFunc("/ping", recoverMiddleware(trackMiddleware(func(w http.ResponseWriter, r *http.Request) {
+	mux.HandleFunc("/ping", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
 		client := tr.GetClient(ip)
-		
+
 		q := r.URL.Query()
 		if lat, err := strconv.Atoi(q.Get("latency")); err == nil {
 			client.Latency = lat
 		}
-		if os := q.Get("os"); os != "" { client.OS = os }
-		if browser := q.Get("browser"); browser != "" { client.Browser = browser }
-		if res := q.Get("resolution"); res != "" { client.Resolution = res }
-		if dev := q.Get("device"); dev != "" { client.DevType = dev }
-		if gpu := q.Get("gpu"); gpu != "" { client.GPU = gpu }
-		if bat, err := strconv.Atoi(q.Get("battery")); err == nil { client.BatPct = bat }
-		if charging := q.Get("charging"); charging != "" { client.Charging = (charging == "true") }
-		
+		if os := q.Get("os"); os != "" {
+			client.OS = os
+		}
+		if browser := q.Get("browser"); browser != "" {
+			client.Browser = browser
+		}
+		if res := q.Get("resolution"); res != "" {
+			client.Resolution = res
+		}
+		if dev := q.Get("device"); dev != "" {
+			client.DevType = dev
+		}
+		if gpu := q.Get("gpu"); gpu != "" {
+			client.GPU = gpu
+		}
+		if bat, err := strconv.Atoi(q.Get("battery")); err == nil {
+			client.BatPct = bat
+		}
+		if charging := q.Get("charging"); charging != "" {
+			client.Charging = (charging == "true")
+		}
+
 		w.WriteHeader(http.StatusOK)
-	})))
+	}))
 
 	mux.HandleFunc("/rejected", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
@@ -159,6 +139,51 @@ func New(
 		ua := r.Header.Get("User-Agent")
 		tr.LogRejection(ip, os, reason, ua)
 		w.WriteHeader(http.StatusOK)
+	}))
+
+	mux.HandleFunc("/push", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil || len(body) == 0 {
+			http.Error(w, "Bad request", http.StatusBadRequest)
+			return
+		}
+
+		// Signal capture to stop if it's running
+		stream.SetHeader([]byte("BRIDGE"))
+
+		// Publish the frame received from the browser
+		stream.Publish(body)
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	mux.HandleFunc("/stats", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+		tr.RLock()
+		defer tr.RUnlock()
+
+		activeClients := make([]tracker.ClientInfo, 0)
+		for _, c := range tr.Clients {
+			if c.Active {
+				activeClients = append(activeClients, *c)
+			}
+		}
+
+		res := map[string]interface{}{
+			"total_transmitted": tr.TotalBytes,
+			"pub_total":         stream.Total,
+			"pub_rate":          stream.GetPubRate(),
+			"clients":           activeClients,
+			"rejections":        tr.Rejections,
+			"uptime":            time.Since(startTime).String(),
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Cache-Control", "no-cache")
+		json.NewEncoder(w).Encode(res)
 	}))
 
 	mux.HandleFunc("/health", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
@@ -170,7 +195,7 @@ func New(
 			}
 		}
 		tr.RUnlock()
-		
+
 		res := map[string]interface{}{
 			"streaming": true,
 			"clients":   activeClients,
@@ -193,13 +218,27 @@ func New(
 
 // recoverMiddleware wraps an http.HandlerFunc to recover from panics and log them.
 func recoverMiddleware(next http.HandlerFunc) http.HandlerFunc {
-    return func(w http.ResponseWriter, r *http.Request) {
-        defer func() {
-            if err := recover(); err != nil {
-                log.Printf("panic recovered in handler: %v", err)
-                http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-            }
-        }()
-        next(w, r)
-    }
+	return func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("panic recovered in handler: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+			}
+		}()
+		next(w, r)
+	}
+}
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "127.0.0.1"
 }

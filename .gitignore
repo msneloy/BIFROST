@@ -1,0 +1,17 @@
+# BIFROST Build Artifacts
+bifrost
+bifrost.exe
+
+# Logs & Diagnostics
+*.log
+*.jpg
+final_*.log
+debug_capture.jpg
+
+# Installer Dependencies (Pre-built)
+libs/
+
+# Go environment
+vendor/
+*.out
+*.test

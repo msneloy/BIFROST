@@ -1,6 +1,7 @@
 package dashboard
 
 import (
+	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
 	"fmt"
 	"io/ioutil"
@@ -220,7 +221,10 @@ func GetSysStats(prev *SysStats) *SysStats {
 	return stats
 }
 
-func Render(tr *tracker.Tracker, primaryURL, fallbackURL, ipURL string, version string) {
+func Start(tr *tracker.Tracker, broadcaster *stream.Broadcaster, ip string, version string) {
+	primaryURL := fmt.Sprintf("http://bifrost.local:8080")
+	fallbackURL := ""
+	ipURL := fmt.Sprintf("http://%s:8080", ip)
 	fmt.Print("\033[?25l") // Hide cursor
 
 	var prevStats *SysStats
@@ -304,7 +308,9 @@ func Render(tr *tracker.Tracker, primaryURL, fallbackURL, ipURL string, version 
 
 		out.WriteString(boxSeparator())
 		totalMB := float64(tr.TotalBytes) / 1024.0 / 1024.0
-		out.WriteString(boxRow(fmt.Sprintf("Σ       %9s %8s", fmt.Sprintf("%5.1fMB/s", totalBandwidth), fmt.Sprintf("%6.1fMB", totalMB))))
+		totalPubMB := float64(broadcaster.Total) / 1024.0 / 1024.0
+		pubRate := float64(broadcaster.GetPubRate()) / 1024.0 / 1024.0
+		out.WriteString(boxRow(fmt.Sprintf("Σ %6.1fMB (Pub: %6.1fMB) R:%4.1fMB/s", totalMB, totalPubMB, pubRate)))
 		out.WriteString(boxBottom())
 
 		if len(tr.Rejections) > 0 {

@@ -1,172 +1,118 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"log"
+	"net"
+	"net/http"
+	"os"
+	"os/exec"
+	"os/signal"
+	"syscall"
+	"time"
+
 	"bifrost/internal/capture"
-	"bifrost/internal/dashboard"
 	"bifrost/internal/mdns"
 	"bifrost/internal/server"
 	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
-	"bifrost/web"
 	"bifrost/internal/watcher"
-	"fmt"
-	"log"
-	"net"
-	"os"
-	"os/exec"
-	"os/signal"
-	"strings"
-	"syscall"
-	"time"
+	"bifrost/web"
 )
-
-// Build:      go build -o bifrost ./cmd/bifrost
-// Run:        ./bifrost
-// Package:    dpkg-deb --build bifrost-package bifrost_0.1.0_amd64.deb
-// Install:    sudo dpkg -i bifrost_0.1.0_amd64.deb
-// Runtime deps: ffmpeg, avahi-daemon, avahi-utils, pipewire
 
 const (
-	AppName          = "BIFROST"
-	AppVersion       = "0.1.0"
-	StreamPort       = 8080
-	StreamFPS        = 10
-	JPEGQuality      = 40
-	MaxClientRows    = 20
-	MaxRejectedRows  = 5
-	ClientTimeout    = 30 * time.Second
-	DashboardRefresh = 1 * time.Second
-
-	MDNSNamePrimary = "bifrost" // → bifrost.local
+	AppName    = "BIFROST"
+	AppVersion = "0.1.0"
+	Port       = 8080
 )
 
-func getLocalIP() string {
-	conn, err := net.Dial("udp", "8.8.8.8:80")
-	if err != nil {
-		return "127.0.0.1"
-	}
-	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
-}
-
 func main() {
-	// 1. ASCII Art & Startup Info
-	dashboard.ClearScreen()
-	fmt.Println("\033[38;5;196m")
-	fmt.Println(`  ██████╗ ██╗███████╗██████╗  ██████╗ ███████╗████████╗`)
-	fmt.Println(`  ██╔══██╗██║██╔════╝██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝`)
-	fmt.Println(`  ██████╔╝██║█████╗  ██████╔╝██║   ██║███████╗   ██║   `)
-	fmt.Println(`  ██╔══██╗██║██╔══╝  ██╔══██╗██║   ██║╚════██║   ██║   `)
-	fmt.Println(`  ██████╔╝██║██║     ██║  ██║╚██████╔╝███████║   ██║   `)
-	fmt.Println("\033[0m")
+	// 0. Print Banner
+	fmt.Print("\033[H\033[2J") // Clear screen
+	fmt.Println(`
+  ██████╗ ██╗███████╗██████╗  ██████╗ ███████╗████████╗
+  ██╔══██╗██║██╔════╝██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝
+  ██████╔╝██║█████╗  ██████╔╝██║   ██║███████╗   ██║   
+  ██╔══██╗██║██╔══╝  ██╔══██╗██║   ██║╚════██║   ██║   
+  ██████╔╝██║██║     ██║  ██║╚██████╔╝███████║   ██║   
+  v0.1.0  | Classroom Screen Broadcasting`)
 
+	// 1. Cleanup orphan processes
+	cleanupOrphans()
+
+	// 2. Detect LAN IP
 	localIP := getLocalIP()
-	primaryURL := fmt.Sprintf("http://%s.local:%d", MDNSNamePrimary, StreamPort)
-	directIPURL := fmt.Sprintf("http://%s:%d", localIP, StreamPort)
+	fmt.Printf("Primary URL:   http://bifrost.local:%d\n", Port)
+	fmt.Printf("Direct IP URL: http://%s:%d\n", localIP, Port)
 
-	fmt.Printf("Starting %s v%s...\n", AppName, AppVersion)
-	fmt.Printf("Primary URL:   %s\n", primaryURL)
-	fmt.Printf("Direct IP URL: %s\n", directIPURL)
-
-	// 1.5 Start code watcher if running in development environment
-	if _, err := exec.LookPath("go"); err == nil {
-		if _, err1 := os.Stat("cmd"); err1 == nil {
-			if _, err2 := os.Stat("internal"); err2 == nil {
-				watcher.Start([]string{"cmd", "internal", "web"}, []string{"go", "build", "-o", "bifrost", "./cmd/bifrost"})
-			}
-		}
-	}
-
-	// 2. Kill orphan processes
-	exec.Command("pkill", "-9", "ffmpeg").Run()
-	exec.Command("pkill", "-9", "gst-launch-1.0").Run()
-
-	// Detect session type
-	sessionType := os.Getenv("XDG_SESSION_TYPE")
-	fmt.Printf("Session type: %s\n", sessionType)
-
-	// Audio setup
-	monitor := capture.DetectPulseAudioMonitor()
-	if monitor != "" {
-		fmt.Printf("Audio source: %s\n", monitor)
-	} else {
-		fmt.Println("Warning: PulseAudio monitor not found. Audio disabled.")
-	}
-
-	// Wait a moment for the user to read startup info
-	time.Sleep(2 * time.Second)
-
-	// Initialize components
+	// 3. Initialize components
 	tr := tracker.New()
-	videoStream := stream.NewBroadcaster()
-	audioStream := stream.NewBroadcaster()
+	broadcaster := stream.NewBroadcaster()
+	broadcaster.SetHeader(nil) // Ensure no stale metadata for MJPEG session
+	capturer := capture.NewCapturer(15, 40)
 
-	// 6. mDNS
-	cleanupMDNS := mdns.Register(MDNSNamePrimary, "", localIP)
-	if cleanupMDNS == nil {
-		log.Println("mDNS registration failed")
+	// 4. Start mDNS
+	stopMDNS := mdns.Register(localIP)
+
+	// 5. Start Capture
+	if err := capturer.Start(broadcaster); err != nil {
+		log.Fatalf("Capture start failed: %v", err)
 	}
 
-	// 7. Screen capture
-	capturer := capture.NewCapturer(StreamFPS, JPEGQuality)
-	if err := capturer.Start(videoStream); err != nil {
-		log.Fatalf("Failed to start screen capture: %v", err)
-	}
-	defer capturer.Stop()
-
-	// 8. Audio capture
-	if monitor != "" {
-		audioCmd := capture.StartAudioBroadcaster(audioStream)
-		if audioCmd != nil {
-			defer audioCmd.Process.Kill()
-		}
-	}
-
-	// 9. HTTP Server
-	srv := server.New(tr, videoStream, audioStream, web.ViewerHTML)
-	srv.Addr = fmt.Sprintf(":%d", StreamPort)
+	// 6. Init HTTP Server
+	srv := server.New(tr, broadcaster, web.ViewerHTML)
+	srv.Addr = fmt.Sprintf(":%d", Port)
 
 	go func() {
-		if err := srv.ListenAndServe(); err != nil {
-			if strings.Contains(err.Error(), "permission denied") {
-				log.Fatalf("Server error: %v\n\n[TIP] Port 80 is a privileged port on Linux. Please run BIFROST with sudo:\n      sudo ./bifrost\n\n", err)
-			}
-			if strings.Contains(err.Error(), "address already in use") {
-				log.Fatalf("Server error: %v\n\n[TIP] Port %d is already in use. Stop the existing BIFROST process or use watch.sh to restart cleanly.\n", err, StreamPort)
-			}
-			log.Fatalf("Server error: %v", err)
+		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("Server error: %v\n\n[TIP] Port %d is already in use.", err, Port)
 		}
 	}()
 
-	// 10. Background tracker pruning
-	go func() {
-		for {
-			time.Sleep(5 * time.Second)
-			tr.Prune(ClientTimeout)
-		}
-	}()
+	// 7. Start Watcher (if in dev)
+	if _, err := exec.LookPath("go"); err == nil {
+		watcher.Start([]string{"cmd", "internal", "web"}, []string{"go", "build", "-o", "bifrost", "./cmd/bifrost"})
+	}
 
-	// 11. Dashboard renderer
-	dashboard.ClearScreen()
-	go dashboard.Render(tr, primaryURL, "", directIPURL, AppVersion)
-
-	// Wait for SIGINT/SIGTERM
+	// Wait for shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	<-sigs
 
-	// Graceful Shutdown
 	fmt.Print("\033[?25h") // Restore cursor
 	fmt.Println("\nShutting down BIFROST...")
 
-	capturer.Stop()
-	exec.Command("pkill", "-9", "ffmpeg").Run()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
 
-	for _, cleanup := range cleanupMDNS {
-		cleanup()
+	srv.Shutdown(ctx)
+	capturer.Stop()
+	for _, stop := range stopMDNS {
+		stop()
 	}
 
-	fmt.Println("BIFROST shutdown complete")
-	os.Exit(0)
+	fmt.Println("BIFROST shutdown complete.")
+}
+
+func getLocalIP() string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return "127.0.0.1"
+	}
+	for _, address := range addrs {
+		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
+			if ipnet.IP.To4() != nil {
+				return ipnet.IP.String()
+			}
+		}
+	}
+	return "127.0.0.1"
+}
+
+func cleanupOrphans() {
+	processes := []string{"ffmpeg", "gst-launch-1.0", "avahi-publish"}
+	for _, p := range processes {
+		_ = exec.Command("pkill", "-9", p).Run()
+	}
 }

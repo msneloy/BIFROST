@@ -23,14 +23,8 @@
       }
 
       @keyframes pulseBorder {
-        0% {
-          box-shadow: inset 0 0 20px #ff0000;
-          border-color: #aa0000;
-        }
-        100% {
-          box-shadow: inset 0 0 60px #ff0000;
-          border-color: #ff3333;
-        }
+        0% { box-shadow: inset 0 0 20px #ff0000; border-color: #aa0000; }
+        100% { box-shadow: inset 0 0 60px #ff0000; border-color: #ff3333; }
       }
 
       #stream {
@@ -47,7 +41,8 @@
         left: 20px;
         z-index: 10;
         display: flex;
-        gap: 15px;
+        flex-direction: column;
+        gap: 10px;
       }
 
       .badge {
@@ -61,24 +56,18 @@
         display: flex;
         align-items: center;
         gap: 8px;
+        width: fit-content;
       }
 
       .badge .dot {
         width: 10px;
         height: 10px;
-        background-color: #ff3333;
+        background-color: #00ff00;
         border-radius: 50%;
         animation: blink 1s infinite alternate;
       }
 
-      @keyframes blink {
-        0% {
-          opacity: 0.3;
-        }
-        100% {
-          opacity: 1;
-        }
-      }
+      @keyframes blink { 0% { opacity: 0.3; } 100% { opacity: 1; } }
 
       .controls {
         position: absolute;
@@ -90,199 +79,245 @@
       }
 
       button {
-        background-color: rgba(0, 0, 0, 0.6);
+        background-color: rgba(0, 0, 0, 0.8);
         color: #ff3333;
         border: 1px solid #ff3333;
-        padding: 8px 16px;
+        padding: 10px 20px;
         cursor: pointer;
         font-family: inherit;
         font-weight: bold;
         transition: all 0.2s;
+        box-shadow: 0 0 10px rgba(255,0,0,0.3);
       }
 
-      button:hover {
-        background-color: #aa0000;
-        color: #fff;
+      button:hover { background-color: #aa0000; color: #fff; box-shadow: 0 0 20px #ff0000; }
+      button:active { transform: scale(0.95); }
+
+      #teacher-ui {
+          display: none;
+          background: rgba(10, 0, 0, 0.95);
+          padding: 25px;
+          border: 2px solid #ff3333;
+          position: absolute;
+          z-index: 100;
+          flex-direction: column;
+          width: 500px;
+          box-shadow: 0 0 50px rgba(255,0,0,0.5);
       }
+
+      .stat-box {
+          background: #111;
+          border: 1px solid #333;
+          padding: 10px;
+          text-align: center;
+      }
+
+      .stat-label { font-size: 10px; color: #888; margin-bottom: 5px; }
+      .stat-value { font-size: 18px; color: #fff; font-weight: bold; }
+
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 8px; border-bottom: 1px solid #222; }
+      th { color: #555; font-size: 10px; text-transform: uppercase; }
     </style>
   </head>
   <body>
-    <!-- Windows Check Script -->
-    <script>
-      (function () {
-        const isWindows = /windows/i.test(navigator.userAgent);
-        if (isWindows) {
-          document.body.innerHTML = `
-                <div style="text-align:center;color:#888;font-family:monospace;display:flex;flex-direction:column;align-items:center;justify-content:center;height:100vh;width:100vw;z-index:9999;position:absolute;background:#0a0a0a;">
-                    <div style="font-size:5rem;margin-bottom:20px;">🪟</div>
-                    <h1 style="color:#ff2222;font-size:3rem;margin:0 0 10px 0;">ACCESS DENIED</h1>
-                    <p style="font-size:1.2rem;margin:5px 0;">BIFROST does not support Windows.</p>
-                    <p style="font-size:1.2rem;margin:5px 0;">Please use a Linux or Android device.</p>
-                    <div style="font-size:0.9rem;margin-top:30px;color:#555;">Error 403 &mdash; Unsupported Operating System</div>
-                </div>`;
-          fetch("/rejected?os=Windows&reason=client_ua");
-          throw new Error("Windows rejected"); // stop execution
-        }
-      })();
-    </script>
-
     <div class="hud">
       <div class="badge">
         <div class="dot" id="status-dot"></div>
-        <span id="status-text">CONNECTING...</span>
+        <span id="status-text">LIVE</span>
       </div>
       <div class="badge" style="background-color: rgba(0, 0, 0, 0.6)">
         <span id="latency-text">-- ms</span>
       </div>
     </div>
 
-    <img id="stream" src="" alt="Stream Output" />
-    <audio id="audio" src="/audio" autoplay></audio>
+    <!-- Student View -->
+    <img id="stream" alt="Live Stream" />
+
+    <!-- Teacher Dashboard UI -->
+    <div id="teacher-ui">
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:15px; border-bottom:1px solid #ff3333; padding-bottom:10px;">
+            <h2 style="margin:0; color:#ff3333">BIFROST CONTROL DEPOT</h2>
+            <div id="uptime-text" style="font-size:12px; color:#888">UPTIME: --</div>
+        </div>
+
+        <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:15px; margin-bottom:20px;">
+            <div class="stat-box">
+                <div class="stat-label">Σ TRANSMITTED</div>
+                <div class="stat-value" id="stat-total">0.0 MB</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">PUB RATE</div>
+                <div class="stat-value" id="stat-pub">0.0 KB/s</div>
+            </div>
+            <div class="stat-box">
+                <div class="stat-label">CLIENTS</div>
+                <div class="stat-value" id="stat-clients">0</div>
+            </div>
+        </div>
+
+        <div id="bridge-controls" style="margin-bottom:20px; padding:15px; background:rgba(255,0,0,0.1); border:1px dashed #ff3333;">
+            <p style="font-size:12px; color:#ccc; margin-top:0;">WAYLAND NATIVE BRIDGE</p>
+            <button id="start-bridge" onclick="startWaylandBridge()">START BROADCAST</button>
+            <div id="bridge-status" style="font-size:11px; color:#00ff00; margin-top:5px;"></div>
+        </div>
+
+        <div style="text-align:left;">
+            <div style="font-size:12px; color:#ff3333; margin-bottom:5px; font-weight:bold;">ACTIVE STUDENTS</div>
+            <div id="student-list" style="max-height:200px; overflow-y:auto; font-size:11px; border:1px solid #333; background:#050505;">
+                <!-- Table injected here -->
+            </div>
+        </div>
+
+        <div style="margin-top:15px; text-align:left;">
+            <div style="font-size:11px; color:#666;">SYSTEM LOGS</div>
+            <div id="rejection-log" style="font-size:10px; color:#aa0000; height:40px; overflow:hidden;"></div>
+        </div>
+    </div>
 
     <div class="controls">
-      <button onclick="syncStream()">SYNC</button>
-      <button onclick="location.reload()">REFRESH</button>
+      <button onclick="location.reload()">SYNC</button>
       <button onclick="toggleFullscreen()">FULLSCREEN</button>
     </div>
 
     <script>
-      const streamImg = document.getElementById("stream");
-      const statusText = document.getElementById("status-text");
-      const statusDot = document.getElementById("status-dot");
-      const latencyText = document.getElementById("latency-text");
+      const urlParams = new URLSearchParams(window.location.search);
+      const isTeacher = urlParams.get('teacher') === 'true' || 
+                        window.location.hostname === 'localhost' || 
+                        window.location.hostname === '127.0.0.1';
+      const streamImg = document.getElementById('stream');
+      const latencyText = document.getElementById('latency-text');
+      const statusText = document.getElementById('status-text');
+      const teacherUI = document.getElementById('teacher-ui');
 
-      let isAlive = false;
-      let isStreamRunning = false;
-      let connectingStartedAt = null;
-
-      function setStatus(text, color) {
-        statusText.innerText = text;
-        statusDot.style.backgroundColor = color;
+      if (isTeacher) {
+          teacherUI.style.display = 'flex';
+          statusText.innerText = "TEACHER MODE";
+          document.body.style.borderColor = "#00ff00";
+          document.body.style.boxShadow = "inset 0 0 50px #00ff00";
       }
 
-      function startStream() {
-        const bust = Date.now();
-        streamImg.src = "/stream?cache-bust=" + bust;
+      // --- Wayland Bridge Logic (Teacher) ---
+      let bridgeActive = false;
+      async function startWaylandBridge() {
+          if (!navigator.mediaDevices || !navigator.mediaDevices.getDisplayMedia) {
+              alert("SECURITY BLOCK: Browser capture requires a 'Secure Context'.\n\nPlease click OK and use this link instead:\nhttp://localhost:8080/?teacher=true");
+              window.location.href = "http://localhost:8080/?teacher=true";
+              return;
+          }
+          try {
+              const stream = await navigator.mediaDevices.getDisplayMedia({
+                  video: { frameRate: 15, cursor: "always" },
+                  audio: false
+              });
+              
+              const video = document.createElement('video');
+              video.srcObject = stream;
+              await video.play();
+
+              const canvas = document.createElement('canvas');
+              const ctx = canvas.getContext('2d');
+              const statusDiv = document.getElementById('bridge-status');
+              
+              bridgeActive = true;
+              document.getElementById('start-bridge').style.display = 'none';
+
+              async function pushFrame() {
+                  if (!bridgeActive) return;
+                  
+                  canvas.width = video.videoWidth;
+                  canvas.height = video.videoHeight;
+                  ctx.drawImage(video, 0, 0);
+                  
+                  canvas.toBlob(async (blob) => {
+                      try {
+                          await fetch('/push', {
+                              method: 'POST',
+                              body: blob
+                          });
+                          statusDiv.innerText = "STREAMING: " + Math.round(blob.size/1024) + " KB";
+                      } catch(e) {}
+                      setTimeout(pushFrame, 66); // 15 FPS
+                  }, 'image/jpeg', 0.8);
+              }
+              pushFrame();
+              
+              stream.getTracks()[0].onended = () => {
+                  bridgeActive = false;
+                  location.reload();
+              };
+
+          } catch (e) {
+              alert("Bridge failed: " + e.message);
+          }
+      }
+
+      // --- Student Refresh Loop ---
+      async function refreshFrame() {
+        const start = performance.now();
+        const t = new Date().getTime();
+        streamImg.src = "/frame?t=" + t;
         
-        const audio = document.getElementById("audio");
-        audio.src = "/audio?cache-bust=" + bust;
-        audio.load();
-        audio.play().catch((e) => console.log("Audio autoplay blocked", e));
-
-        setStatus("CONNECTING...", "#ffcc00");
-        isStreamRunning = true;
-        connectingStartedAt = Date.now();
+        streamImg.onload = () => {
+            const end = performance.now();
+            latencyText.innerText = Math.round(end - start) + " ms";
+            setTimeout(refreshFrame, isTeacher ? 500 : 33); // Lower cadence for teacher preview
+        };
+        
+        streamImg.onerror = () => {
+            setTimeout(refreshFrame, 1000);
+        };
       }
 
-      function stopStream() {
-        streamImg.src = "about:blank";
-        const audio = document.getElementById("audio");
-        audio.src = "";
-        audio.load();
-        isStreamRunning = false;
-        connectingStartedAt = null;
-      }
-
-      function syncStream() {
-        stopStream();
-        setStatus("RECONNECTING...", "#ff9900");
-        setTimeout(startStream, 100);
-      }
+      refreshFrame();
 
       function toggleFullscreen() {
         if (!document.fullscreenElement) {
-          document.documentElement.requestFullscreen().catch((err) => {});
+          document.documentElement.requestFullscreen();
         } else {
           document.exitFullscreen();
         }
       }
 
-      // Latency & Fingerprinting
-      function getFingerprint() {
-        const ua = navigator.userAgent;
-        let os = "Unknown";
-        if (/android/i.test(ua)) os = "Android";
-        else if (/linux/i.test(ua)) os = "Linux";
-        else if (/mac os/i.test(ua)) os = "macOS";
-        else if (/iphone|ipad|ipod/i.test(ua)) os = "iOS";
-
-        let browser = "Unknown";
-        if (/chrome|crios|crmo/i.test(ua)) browser = "Chrome";
-        else if (/firefox|iceweasel|fxios/i.test(ua)) browser = "Firefox";
-        else if (/safari/i.test(ua)) browser = "Safari";
-
-        let gpu = "Unknown";
-        try {
-          const canvas = document.createElement("canvas");
-          const gl =
-            canvas.getContext("webgl") ||
-            canvas.getContext("experimental-webgl");
-          const ext = gl.getExtension("WEBGL_debug_renderer_info");
-          if (ext) gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
-        } catch (e) {}
-
-        return {
-          os,
-          browser,
-          resolution: `${window.screen.width}x${window.screen.height}`,
-          device: /Mobi|Android/i.test(ua) ? "Mobile" : "Desktop",
-          gpu,
-        };
+      function formatSize(bytes) {
+          if (bytes === 0) return '0.0 MB';
+          const units = ['B', 'KB', 'MB', 'GB'];
+          const i = Math.floor(Math.log(bytes) / Math.log(1024));
+          return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
       }
 
-      async function ping() {
-        const start = performance.now();
-        const fp = getFingerprint();
+      async function updateStats() {
+          if (!isTeacher) return;
+          try {
+              const res = await fetch('/stats');
+              const data = await res.json();
+              
+              document.getElementById('stat-total').innerText = formatSize(data.total_transmitted);
+              document.getElementById('stat-pub').innerText = (data.pub_rate / 1024).toFixed(1) + " KB/s";
+              document.getElementById('stat-clients').innerText = data.clients.length;
+              document.getElementById('uptime-text').innerText = "UPTIME: " + data.uptime.split('.')[0];
 
-        let batteryQuery = "";
-        try {
-          if (navigator.getBattery) {
-            const bat = await navigator.getBattery();
-            batteryQuery = `&battery=${Math.round(bat.level * 100)}&charging=${bat.charging}`;
-          }
-        } catch (e) {}
+              const list = document.getElementById('student-list');
+              let html = '<table><thead><tr><th>IP</th><th>OS</th><th>LATENCY</th><th>Σ</th></tr></thead><tbody>';
+              data.clients.forEach(c => {
+                  html += `<tr>
+                    <td>${c.IP}</td>
+                    <td>${c.OS || 'Unknown'}</td>
+                    <td>${c.Latency}ms</td>
+                    <td>${formatSize(c.Bytes)}</td>
+                  </tr>`;
+              });
+              html += '</tbody></table>';
+              list.innerHTML = html;
 
-        try {
-          await fetch(
-            `/ping?latency=${Math.round(performance.now() - start)}&os=${fp.os}&browser=${fp.browser}&resolution=${fp.resolution}&device=${fp.device}&gpu=${encodeURIComponent(fp.gpu)}${batteryQuery}`,
-          );
-          latencyText.innerText = Math.round(performance.now() - start) + " ms";
-          
-          isAlive = true;
-          // Reconnect stream if it wasn't running
-          if (!isStreamRunning) {
-            startStream();
-          } else if (connectingStartedAt && (Date.now() - connectingStartedAt > 5000)) {
-            // Stalled in connecting state for too long (e.g. browser backgrounding or stalled connection)
-            console.log("Stream stalled in connecting state, reconnecting...");
-            syncStream();
-          }
-        } catch (e) {
-          isAlive = false;
-          setStatus("DISCONNECTED", "#ff3333");
-          if (isStreamRunning) {
-            stopStream();
-          }
-        }
+              const logs = document.getElementById('rejection-log');
+              logs.innerHTML = data.rejections.map(r => `<div>[${r.Time.split('T')[1].split('.')[0]}] REJECTED: ${r.IP} (${r.Reason})</div>`).join('');
+
+          } catch(e) { console.error("Stats fail", e); }
+          setTimeout(updateStats, 2000);
       }
 
-      streamImg.addEventListener("load", () => {
-        setStatus("LIVE", "#00ff00");
-        connectingStartedAt = null;
-      });
-
-      streamImg.addEventListener("error", () => {
-        if (isAlive) {
-          syncStream();
-        } else {
-          setStatus("DISCONNECTED", "#ff3333");
-          stopStream();
-        }
-      });
-
-      startStream();
-      setInterval(ping, 2000);
-      ping();
+      if (isTeacher) updateStats();
     </script>
   </body>
 </html>

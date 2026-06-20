@@ -4,54 +4,49 @@ import (
 	"bufio"
 	"log"
 	"os/exec"
-	"strings"
 )
 
-func Register(primaryName, fallbackName, ip string) []func() {
+func Register(ip string) []func() {
 	var cmds []*exec.Cmd
 
-	if _, err := exec.LookPath("avahi-publish"); err != nil {
-		log.Println("avahi-publish not found — mDNS disabled. Install avahi-daemon/avahi-utils.")
-		return nil
-	}
+	names := []string{"bifrost.local"}
 
-	pName := primaryName
-	if !strings.HasSuffix(pName, ".local") {
-		pName += ".local"
+	avahiPath, _ := exec.LookPath("avahi-publish")
+	if avahiPath == "" {
+		avahiPath = "vendor/bin/avahi-publish"
+	}
+	// Fallback to absolute if vendor is missing or absolute path is needed
+	if _, err := exec.LookPath(avahiPath); err != nil {
+		avahiPath = "/opt/bifrost/bin/avahi-publish"
 	}
 
 	startPublish := func(name string) *exec.Cmd {
-		cmd := exec.Command("avahi-publish", "-a", "-R", name, ip)
+		cmd := exec.Command(avahiPath, "-a", "-R", name, ip)
 		stderr, err := cmd.StderrPipe()
 		if err != nil {
-			log.Printf("Failed to create stderr pipe for avahi-publish %s: %v", name, err)
 			return nil
 		}
 		if err := cmd.Start(); err != nil {
-			log.Printf("Failed to start avahi-publish for %s: %v", name, err)
+			log.Printf("Failed to start mDNS for %s: %v", name, err)
 			return nil
 		}
 		go func() {
 			scanner := bufio.NewScanner(stderr)
 			for scanner.Scan() {
-				log.Printf("[avahi-publish %s] %s", name, scanner.Text())
+				log.Printf("[mdns %s] %s", name, scanner.Text())
 			}
 		}()
 		return cmd
 	}
 
-	if cmd1 := startPublish(pName); cmd1 != nil {
-		cmds = append(cmds, cmd1)
+	for _, name := range names {
+		if cmd := startPublish(name); cmd != nil {
+			cmds = append(cmds, cmd)
+		}
 	}
 
-	if fallbackName != "" {
-		fName := fallbackName
-		if !strings.HasSuffix(fName, ".local") {
-			fName += ".local"
-		}
-		if cmd2 := startPublish(fName); cmd2 != nil {
-			cmds = append(cmds, cmd2)
-		}
+	if len(cmds) == 0 {
+		log.Println("Warning: mDNS registration failed or avahi-publish not found.")
 	}
 
 	return []func(){
