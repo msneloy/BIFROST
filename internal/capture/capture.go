@@ -15,6 +15,9 @@ import (
 
 var staticOnce sync.Once
 
+// Capturer manages the screen capture lifecycle using ffmpeg.
+// It detects the display server (X11/Wayland), spawns ffmpeg, and parses
+// JPEG frames from its stdout by scanning for SOI/EOI markers.
 type Capturer struct {
 	fps     int
 	quality int
@@ -23,6 +26,8 @@ type Capturer struct {
 	mu      sync.Mutex
 }
 
+// NewCapturer creates a Capturer with the given target frame rate and
+// JPEG quality. FPS defaults to 15 if non-positive.
 func NewCapturer(fps, quality int) *Capturer {
 	if fps <= 0 {
 		fps = 15
@@ -34,6 +39,9 @@ func NewCapturer(fps, quality int) *Capturer {
 	}
 }
 
+// Start begins screen capture by detecting the session type and launching
+// the appropriate ffmpeg pipeline. X11 uses x11grab; Wayland uses kmsgrab.
+// Frames are published to the provided Broadcaster as they are decoded.
 func (c *Capturer) Start(broadcaster *stream.Broadcaster) (err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -154,6 +162,8 @@ func (c *Capturer) Start(broadcaster *stream.Broadcaster) (err error) {
 	return nil
 }
 
+// Stop terminates the capture by closing the done channel and killing
+// the ffmpeg process and its children.
 func (c *Capturer) Stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -171,6 +181,8 @@ func (c *Capturer) Stop() {
 	}
 }
 
+// DetectPulseAudioMonitor returns the PulseAudio monitor source name
+// for audio capture. Currently a stub that returns an empty string.
 func DetectPulseAudioMonitor() string {
 	return ""
 }

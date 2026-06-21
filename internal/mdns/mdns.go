@@ -6,6 +6,10 @@ import (
 	"os/exec"
 )
 
+// Register publishes .local mDNS hostnames via avahi-publish, pointing them
+// to the given IP address. It resolves the avahi-publish binary from PATH,
+// vendor/bin, or /opt/bifrost/bin. Returns cleanup functions that kill the
+// avahi-publish processes on shutdown.
 func Register(ip string) []func() {
 	var cmds []*exec.Cmd
 

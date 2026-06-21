@@ -9,6 +9,8 @@ import (
 	"time"
 )
 
+// ClientInfo holds per-client state including connection metadata,
+// bandwidth counters, and device information reported by the browser.
 type ClientInfo struct {
 	IP         string
 	Hostname   string
@@ -27,6 +29,8 @@ type ClientInfo struct {
 	Active     bool
 }
 
+// RejectedClient records a rejected connection attempt, including
+// the client IP, OS, rejection reason, and timestamp.
 type RejectedClient struct {
 	IP        string
 	OS        string
@@ -35,6 +39,8 @@ type RejectedClient struct {
 	UserAgent string
 }
 
+// Tracker is a thread-safe registry of connected clients and rejected
+// connection attempts. It handles async DNS/MAC resolution and bandwidth tracking.
 type Tracker struct {
 	mu         sync.RWMutex
 	Clients    map[string]*ClientInfo
@@ -66,6 +72,9 @@ func (t *Tracker) GetAllClients() []*ClientInfo {
 	return clients
 }
 
+// GetClient returns the ClientInfo for the given IP, creating a new entry
+// if one doesn't exist. It spawns background goroutines for async DNS
+// reverse lookup and MAC address resolution via /proc/net/arp.
 func (t *Tracker) GetClient(ip string) *ClientInfo {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -111,6 +120,8 @@ func (t *Tracker) GetClient(ip string) *ClientInfo {
 	return client
 }
 
+// AddBytes increments the byte counter for the specified client and
+// the global total. No-op if the client is not registered.
 func (t *Tracker) AddBytes(ip string, n int64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -120,6 +131,8 @@ func (t *Tracker) AddBytes(ip string, n int64) {
 	}
 }
 
+// LogRejection records a rejected client connection. The rejection log
+// is capped at 5 entries with newest-first ordering.
 func (t *Tracker) LogRejection(ip, os, reason, ua string) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -137,6 +150,8 @@ func (t *Tracker) LogRejection(ip, os, reason, ua string) {
 	}
 }
 
+// Prune marks clients as inactive if they haven't been seen within
+// the specified timeout duration.
 func (t *Tracker) Prune(timeout time.Duration) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -148,6 +163,8 @@ func (t *Tracker) Prune(timeout time.Duration) {
 	}
 }
 
+// lookupMAC resolves a MAC address by parsing /proc/net/arp for the
+// given IP address. Returns empty string if not found.
 func lookupMAC(ip string) string {
 	file, err := os.Open("/proc/net/arp")
 	if err != nil {

@@ -16,6 +16,8 @@ import (
 
 var startTime = time.Now()
 
+// getIP extracts the client IP address from the request's RemoteAddr,
+// stripping the port number.
 func getIP(r *http.Request) string {
 	ip := r.RemoteAddr
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
@@ -24,6 +26,10 @@ func getIP(r *http.Request) string {
 	return ip
 }
 
+// New creates an HTTP server with all routes registered. It sets up
+// the web viewer, MJPEG streaming, frame serving, client telemetry,
+// stats, health check, and browser bridge endpoints. TCP_NODELAY is
+// enabled on all new connections for reduced latency.
 func New(
 	tr *tracker.Tracker,
 	stream *stream.Broadcaster,
@@ -216,7 +222,8 @@ func New(
 	}
 }
 
-// recoverMiddleware wraps an http.HandlerFunc to recover from panics and log them.
+// recoverMiddleware wraps an http.HandlerFunc to recover from panics
+// and return a 500 Internal Server Error instead of crashing the server.
 func recoverMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {

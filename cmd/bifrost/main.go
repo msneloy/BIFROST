@@ -95,6 +95,8 @@ func main() {
 	fmt.Println("BIFROST shutdown complete.")
 }
 
+// getLocalIP returns the first non-loopback IPv4 address found on the
+// machine, or "127.0.0.1" as a fallback.
 func getLocalIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -110,6 +112,8 @@ func getLocalIP() string {
 	return "127.0.0.1"
 }
 
+// cleanupOrphans kills any lingering ffmpeg, gst-launch-1.0, and
+// avahi-publish processes from previous BIFROST runs.
 func cleanupOrphans() {
 	processes := []string{"ffmpeg", "gst-launch-1.0", "avahi-publish"}
 	for _, p := range processes {

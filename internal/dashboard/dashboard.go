@@ -16,6 +16,8 @@ import (
 	"time"
 )
 
+// bar renders a text progress bar of the given width using filled (█) and
+// empty (░) block characters based on the percentage value.
 func bar(pct float64, width int) string {
 	filled := int(math.Round(pct / 100.0 * float64(width)))
 	if filled < 0 {
@@ -66,7 +68,7 @@ func readLine(path string) string {
 	return strings.TrimSpace(strings.Split(string(data), "\n")[0])
 }
 
-// System stats gathering
+// SysStats holds system metrics gathered from /proc and /sys on each refresh.
 type SysStats struct {
 	CPUUsage  float64
 	CPUFreq   string
@@ -92,6 +94,10 @@ type SysStats struct {
 	BatETA    string
 }
 
+// GetSysStats gathers current system metrics by reading /proc and /sys files.
+// CPU usage is approximated from /proc/loadavg assuming 8 cores. Hardware
+// temperatures and fan speeds come from /sys/class/hwmon. Previous stats
+// are passed for delta calculations (bandwidth).
 func GetSysStats(prev *SysStats) *SysStats {
 	stats := &SysStats{}
 
@@ -221,6 +227,9 @@ func GetSysStats(prev *SysStats) *SysStats {
 	return stats
 }
 
+// Start runs the terminal dashboard in an infinite loop, refreshing every
+// second. It renders the BIFROST banner, system stats, connected client
+// table, rejection log, and footer with uptime and totals.
 func Start(tr *tracker.Tracker, broadcaster *stream.Broadcaster, ip string, version string) {
 	primaryURL := fmt.Sprintf("http://bifrost.local:8080")
 	fallbackURL := ""

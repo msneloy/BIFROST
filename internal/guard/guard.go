@@ -43,6 +43,9 @@ const windowsRejectionHTML = `
 </html>
 `
 
+// RejectWindows is HTTP middleware that blocks clients with "windows" in
+// their User-Agent header. It returns a styled 403 Forbidden page and
+// logs the rejection to the tracker.
 func RejectWindows(tr *tracker.Tracker, next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ua := strings.ToLower(r.Header.Get("User-Agent"))

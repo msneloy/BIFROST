@@ -10,8 +10,10 @@ import (
 	"time"
 )
 
-// Start monitors the specified directories for modifications in .go, .html, and .tmpl files.
-// When a change is detected, it rebuilds the binary using buildCmd and restarts the process.
+// Start monitors the specified directories for modifications in .go, .html,
+// and .tmpl files. When a change is detected, it rebuilds the binary using
+// buildCmd and restarts the process via syscall.Exec (Unix) or a new process
+// spawn (Windows).
 func Start(dirs []string, buildCmd []string) {
 	files := make(map[string]time.Time)
 	initialized := false
