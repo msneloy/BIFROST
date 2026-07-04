@@ -15,3 +15,14 @@ libs/
 vendor/
 *.out
 *.test
+
+# Intermediate experiment scripts
+scripts/capture.js
+scripts/capture.py
+scripts/portal_capture.py
+scripts/wayland_capture.py
+
+# Temp files
+*.bin
+*.mjpg
+*.pw
