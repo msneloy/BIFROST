@@ -13,12 +13,11 @@ import (
 	"time"
 
 	"bifrost/internal/capture"
+	"bifrost/internal/dashboard"
 	"bifrost/internal/mdns"
 	"bifrost/internal/server"
 	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
-	"bifrost/internal/watcher"
-	"bifrost/web"
 )
 
 const (
@@ -28,40 +27,35 @@ const (
 )
 
 func main() {
-	// 0. Print Banner
-	fmt.Print("\033[H\033[2J") // Clear screen
+	fmt.Print("\033[H\033[2J")
 	fmt.Println(`
   ██████╗ ██╗███████╗██████╗  ██████╗ ███████╗████████╗
   ██╔══██╗██║██╔════╝██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝
-  ██████╔╝██║█████╗  ██████╔╝██║   ██║███████╗   ██║   
-  ██╔══██╗██║██╔══╝  ██╔══██╗██║   ██║╚════██║   ██║   
-  ██████╔╝██║██║     ██║  ██║╚██████╔╝███████║   ██║   
+  ██████╔╝██║█████╗  ██████╔╝██║   ██║███████╗   ██║
+  ██╔══██╗██║██╔══╝  ██╔══██╗██║   ██║╚════██║   ██║
+  ██████╔╝██║██║     ██║  ██║╚██████╔╝███████║   ██║
   v0.1.0  | Classroom Screen Broadcasting`)
 
-	// 1. Cleanup orphan processes
 	cleanupOrphans()
 
-	// 2. Detect LAN IP
 	localIP := getLocalIP()
-	fmt.Printf("Primary URL:   http://bifrost.local:%d\n", Port)
-	fmt.Printf("Direct IP URL: http://%s:%d\n", localIP, Port)
 
-	// 3. Initialize components
+	// Initialize components
 	tr := tracker.New()
 	broadcaster := stream.NewBroadcaster()
-	broadcaster.SetHeader(nil) // Ensure no stale metadata for MJPEG session
+	broadcaster.SetHeader(nil)
 	capturer := capture.NewCapturer(15, 40)
 
-	// 4. Start mDNS
+	// Start mDNS
 	stopMDNS := mdns.Register(localIP)
 
-	// 5. Start Capture
+	// Start Capture (video + audio, single pipeline for sync)
 	if err := capturer.Start(broadcaster); err != nil {
-		log.Fatalf("Capture start failed: %v", err)
+		log.Fatalf("Capture failed: %v", err)
 	}
 
-	// 6. Init HTTP Server
-	srv := server.New(tr, broadcaster, web.ViewerHTML)
+	// Start HTTP streaming server
+	srv := server.New(tr, broadcaster)
 	srv.Addr = fmt.Sprintf(":%d", Port)
 
 	go func() {
@@ -70,17 +64,24 @@ func main() {
 		}
 	}()
 
-	// 7. Start Watcher (if in dev)
+	// Start dev watcher for auto-rebuild
 	if _, err := exec.LookPath("go"); err == nil {
-		watcher.Start([]string{"cmd", "internal", "web"}, []string{"go", "build", "-o", "bifrost", "./cmd/bifrost"})
+		startWatcher()
 	}
+
+	// Launch terminal dashboard (blocks — runs until SIGINT/SIGTERM)
+	fmt.Print("\033[?25l")
+	go func() {
+		time.Sleep(500 * time.Millisecond)
+		dashboard.Start(tr, broadcaster, localIP, AppVersion)
+	}()
 
 	// Wait for shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
 	<-sigs
 
-	fmt.Print("\033[?25h") // Restore cursor
+	fmt.Print("\033[?25h")
 	fmt.Println("\nShutting down BIFROST...")
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
@@ -95,8 +96,6 @@ func main() {
 	fmt.Println("BIFROST shutdown complete.")
 }
 
-// getLocalIP returns the first non-loopback IPv4 address found on the
-// machine, or "127.0.0.1" as a fallback.
 func getLocalIP() string {
 	addrs, err := net.InterfaceAddrs()
 	if err != nil {
@@ -112,11 +111,15 @@ func getLocalIP() string {
 	return "127.0.0.1"
 }
 
-// cleanupOrphans kills any lingering ffmpeg, gst-launch-1.0, and
-// avahi-publish processes from previous BIFROST runs.
 func cleanupOrphans() {
-	processes := []string{"ffmpeg", "gst-launch-1.0", "avahi-publish"}
-	for _, p := range processes {
+	for _, p := range []string{"ffmpeg", "gst-launch-1.0", "avahi-publish"} {
 		_ = exec.Command("pkill", "-9", p).Run()
 	}
+}
+
+func startWatcher() {
+	cmd := exec.Command("go", "build", "-o", "bifrost", "./cmd/bifrost")
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+	_ = cmd.Run()
 }

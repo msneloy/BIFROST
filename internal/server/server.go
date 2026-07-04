@@ -16,8 +16,6 @@ import (
 
 var startTime = time.Now()
 
-// getIP extracts the client IP address from the request's RemoteAddr,
-// stripping the port number.
 func getIP(r *http.Request) string {
 	ip := r.RemoteAddr
 	if idx := strings.LastIndex(ip, ":"); idx != -1 {
@@ -26,14 +24,9 @@ func getIP(r *http.Request) string {
 	return ip
 }
 
-// New creates an HTTP server with all routes registered. It sets up
-// the web viewer, MJPEG streaming, frame serving, client telemetry,
-// stats, health check, and browser bridge endpoints. TCP_NODELAY is
-// enabled on all new connections for reduced latency.
 func New(
 	tr *tracker.Tracker,
-	stream *stream.Broadcaster,
-	viewerHTML string,
+	broadcaster *stream.Broadcaster,
 ) *http.Server {
 	mux := http.NewServeMux()
 
@@ -42,15 +35,86 @@ func New(
 			http.NotFound(w, r)
 			return
 		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+		fmt.Fprint(w, `<!doctype html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BIFROST</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0000;color:#fff;font-family:'Courier New',monospace;height:100vh;overflow:hidden}
+#stream{position:fixed;top:0;left:0;width:100vw;height:100vh;object-fit:contain;z-index:0}
+.hud{position:fixed;top:10px;left:10px;z-index:10;background:rgba(170,0,0,0.85);
+  border:1px solid #ff3333;padding:6px 12px;border-radius:4px;font-size:13px;font-weight:bold}
+.hud .dot{display:inline-block;width:8px;height:8px;background:#0f0;border-radius:50%;
+  margin-right:6px;animation:blink 1s infinite alternate}
+@keyframes blink{from{opacity:.3}to{opacity:1}}
+#bridge-btn{position:fixed;top:10px;right:10px;z-index:10;background:#aa0000;color:#fff;
+  border:1px solid #ff3333;padding:10px 20px;cursor:pointer;font-family:inherit;
+  font-weight:bold;font-size:14px;border-radius:4px}
+#bridge-btn:hover{background:#ff3333}
+#status{position:fixed;bottom:10px;left:10px;z-index:10;font-size:11px;color:#666}
+</style>
+</head><body>
+<div class="hud"><span class="dot"></span><span id="label">STUDENT VIEW</span></div>
+<img id="stream">
+<button id="bridge-btn" onclick="startBridge()">START BROADCAST</button>
+<div id="status"></div>
+<script>
+var img=document.getElementById("stream");
+var btn=document.getElementById("bridge-btn");
+var lbl=document.getElementById("label");
+var stat=document.getElementById("status");
+var bridge=false;
 
-		w.Header().Set("Content-Type", "text/html")
-		w.Write([]byte(viewerHTML))
+function poll(){
+  if(!bridge){
+    var x=new Image();
+    x.onload=function(){img.src=x.src;setTimeout(poll,66)};
+    x.onerror=function(){setTimeout(poll,1000)};
+    x.src="/frame?t="+Date.now();
+  }
+}
+poll();
+
+function startBridge(){
+  if(!navigator.mediaDevices||!navigator.mediaDevices.getDisplayMedia){
+    alert("Screen capture requires HTTPS or localhost.");return;
+  }
+  navigator.mediaDevices.getDisplayMedia({video:{frameRate:15,cursor:"always"},audio:false})
+  .then(function(stream){
+    bridge=true;
+    btn.style.display="none";
+    lbl.innerText="BROADCASTING";
+    document.querySelector(".dot").style.background="#ff0000";
+    var video=document.createElement("video");
+    video.srcObject=stream;video.play();
+    var canvas=document.createElement("canvas");
+    var ctx=canvas.getContext("2d");
+    function push(){
+      if(!bridge)return;
+      canvas.width=video.videoWidth;canvas.height=video.videoHeight;
+      ctx.drawImage(video,0,0);
+      canvas.toBlob(function(blob){
+        fetch("/push",{method:"POST",body:blob}).then(function(r){
+          stat.innerText="Frame: "+Math.round(blob.size/1024)+"KB";
+        }).catch(function(){});
+        setTimeout(push,66);
+      },"image/jpeg",0.8);
+    }
+    push();
+    stream.getTracks()[0].onended=function(){bridge=false;location.reload()};
+  }).catch(function(e){alert("Capture failed: "+e.message)});
+}
+</script>
+</body></html>`)
 	}))
 
 	mux.HandleFunc("/frame", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
+		log.Printf("[/frame] request from %s", r.RemoteAddr)
 
-		frame := stream.GetLastFrame()
+		frame := broadcaster.GetLastFrame()
 		if frame == nil {
 			w.WriteHeader(http.StatusNoContent)
 			return
@@ -72,8 +136,8 @@ func New(
 		w.Header().Set("Cache-Control", "no-cache, private")
 		w.Header().Set("Pragma", "no-cache")
 
-		ch := stream.Subscribe(100)
-		defer stream.Unsubscribe(ch)
+		ch := broadcaster.Subscribe(100)
+		defer broadcaster.Unsubscribe(ch)
 
 		flusher, ok := w.(http.Flusher)
 		if !ok {
@@ -99,11 +163,6 @@ func New(
 			}
 		}
 	}))
-
-	// Audio endpoint is now redundant as it's muxed in /stream
-	mux.HandleFunc("/audio", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusGone)
-	})
 
 	mux.HandleFunc("/ping", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
@@ -159,11 +218,8 @@ func New(
 			return
 		}
 
-		// Signal capture to stop if it's running
-		stream.SetHeader([]byte("BRIDGE"))
-
-		// Publish the frame received from the browser
-		stream.Publish(body)
+		broadcaster.SetHeader([]byte("BRIDGE"))
+		broadcaster.Publish(body)
 		w.WriteHeader(http.StatusOK)
 	}))
 
@@ -180,8 +236,8 @@ func New(
 
 		res := map[string]interface{}{
 			"total_transmitted": tr.TotalBytes,
-			"pub_total":         stream.Total,
-			"pub_rate":          stream.GetPubRate(),
+			"pub_total":         broadcaster.Total,
+			"pub_rate":          broadcaster.GetPubRate(),
 			"clients":           activeClients,
 			"rejections":        tr.Rejections,
 			"uptime":            time.Since(startTime).String(),
@@ -222,8 +278,6 @@ func New(
 	}
 }
 
-// recoverMiddleware wraps an http.HandlerFunc to recover from panics
-// and return a 500 Internal Server Error instead of crashing the server.
 func recoverMiddleware(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		defer func() {
@@ -234,18 +288,4 @@ func recoverMiddleware(next http.HandlerFunc) http.HandlerFunc {
 		}()
 		next(w, r)
 	}
-}
-func getLocalIP() string {
-	addrs, err := net.InterfaceAddrs()
-	if err != nil {
-		return "127.0.0.1"
-	}
-	for _, address := range addrs {
-		if ipnet, ok := address.(*net.IPNet); ok && !ipnet.IP.IsLoopback() {
-			if ipnet.IP.To4() != nil {
-				return ipnet.IP.String()
-			}
-		}
-	}
-	return "127.0.0.1"
 }

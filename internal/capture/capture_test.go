@@ -4,11 +4,9 @@ import (
 	"testing"
 )
 
-func TestDetectPulseAudioMonitor(t *testing.T) {
-	// This test doesn't actually run a monitor but checks if the function returns something reasonable
-	// or doesn't crash.
-	monitor := DetectPulseAudioMonitor()
-	t.Logf("Detected monitor: %s", monitor)
+func TestDetectPulseAudioSource(t *testing.T) {
+	source := detectPulseAudioSource()
+	t.Logf("Detected audio source: %s", source)
 }
 
 func TestNewCapturer(t *testing.T) {

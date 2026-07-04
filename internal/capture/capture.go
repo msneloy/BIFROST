@@ -7,17 +7,14 @@ import (
 	"log"
 	"os"
 	"os/exec"
+	"runtime"
 	"sync"
-	"time"
 
 	"bifrost/internal/stream"
 )
 
 var staticOnce sync.Once
 
-// Capturer manages the screen capture lifecycle using ffmpeg.
-// It detects the display server (X11/Wayland), spawns ffmpeg, and parses
-// JPEG frames from its stdout by scanning for SOI/EOI markers.
 type Capturer struct {
 	fps     int
 	quality int
@@ -26,8 +23,6 @@ type Capturer struct {
 	mu      sync.Mutex
 }
 
-// NewCapturer creates a Capturer with the given target frame rate and
-// JPEG quality. FPS defaults to 15 if non-positive.
 func NewCapturer(fps, quality int) *Capturer {
 	if fps <= 0 {
 		fps = 15
@@ -39,131 +34,155 @@ func NewCapturer(fps, quality int) *Capturer {
 	}
 }
 
-// Start begins screen capture by detecting the session type and launching
-// the appropriate ffmpeg pipeline. X11 uses x11grab; Wayland uses kmsgrab.
-// Frames are published to the provided Broadcaster as they are decoded.
-func (c *Capturer) Start(broadcaster *stream.Broadcaster) (err error) {
+func (c *Capturer) Start(broadcaster *stream.Broadcaster) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Hybrid Capture Engine (Wayland + X11 Aware)
-	// We use FFmpeg with MJPEG output for zero-stall stability
-	var pipelineStr string
-
 	sessionType := os.Getenv("XDG_SESSION_TYPE")
+
 	if sessionType == "wayland" {
-		// Native Wayland capture via KMS (requires cap_sys_admin+ep on ffmpeg)
-		pipelineStr = fmt.Sprintf("ffmpeg -loglevel error -f kmsgrab -follow_mouse 1 -i /dev/dri/card0 -vf 'hwdownload,format=bgr0,fps=%d,scale=1280:-1' -f mjpeg -q:v 2 -", c.fps)
-		log.Printf("Detected Wayland session. Using kmsgrab bridge.")
-	} else {
-		// Standard X11 capture
-		pipelineStr = fmt.Sprintf("ffmpeg -loglevel error -f x11grab -draw_mouse 1 -video_size 1280x720 -framerate %d -i :0.0 -f mjpeg -q:v 2 -", c.fps)
-		log.Printf("Detected X11 session. Using x11grab bridge.")
+		return c.startMutter(broadcaster)
 	}
+	return c.startX11(broadcaster)
+}
 
-	// The capture loop now is a lightweight goroutine that just keeps the broadcaster alive
-	// while waiting for browser-native push or binary capture.
-	log.Printf("Capture engine ACTIVE (Monitoring for frames...)")
+func (c *Capturer) startMutter(broadcaster *stream.Broadcaster) error {
+	log.Println("Wayland detected — using Mutter ScreenCast (zero interaction)")
 
-	go func() {
-		for {
-			select {
-			case <-c.done:
-				return
-			case <-time.After(5 * time.Second):
-				// Just a heartbeat
-			}
-		}
-	}()
+	helper := findFile(
+		"scripts/mutter_capture.py",
+		"../scripts/mutter_capture.py",
+		"../../scripts/mutter_capture.py",
+	)
 
-	log.Printf("Starting HYBRID capture: %s", pipelineStr)
-
-	cmd := exec.Command("sh", "-c", pipelineStr)
+	cmd := exec.Command("python3", helper)
 	cmd.Env = os.Environ()
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return err
+		return fmt.Errorf("stdout pipe: %w", err)
 	}
 
+	stderr, _ := cmd.StderrPipe()
+	go pipeLog(stderr, "[portal]")
+
 	if err := cmd.Start(); err != nil {
-		return err
+		return fmt.Errorf("portal capture start: %w", err)
 	}
 	c.cmd = cmd
 
-	// Feed stdout to broadcaster with JPEG boundary parsing
-	go func() {
-		defer cmd.Wait()
+	log.Printf("Portal capture PID %d", cmd.Process.Pid)
 
-		var buffer bytes.Buffer
-		tempBuf := make([]byte, 64*1024)
-
-		for {
-			select {
-			case <-c.done:
-				return
-			default:
-				n, err := stdout.Read(tempBuf)
-				if n > 0 {
-					buffer.Write(tempBuf[:n])
-					content := buffer.Bytes()
-					for {
-						start := bytes.Index(content, []byte{0xFF, 0xD8})
-						if start == -1 {
-							if buffer.Len() > 0 {
-								lastByte := content[len(content)-1]
-								buffer.Reset()
-								buffer.WriteByte(lastByte)
-							}
-							break
-						}
-
-						end := bytes.Index(content[start:], []byte{0xFF, 0xD9})
-						if end == -1 {
-							newData := make([]byte, len(content[start:]))
-							copy(newData, content[start:])
-							buffer.Reset()
-							buffer.Write(newData)
-							break
-						}
-
-						frameLen := end + 2
-						frame := make([]byte, frameLen)
-						copy(frame, content[start:start+frameLen])
-
-						// Priority check: If a browser-native bridge is active, stop binary capture
-						if string(broadcaster.GetHeader()) == "BRIDGE" {
-							log.Println("BRIDGE DETECTED: Binary capture yielding to browser-native stream.")
-							return
-						}
-
-						// Live Diagnostic: Save one frame to project root to verify capture
-						staticOnce.Do(func() {
-							_ = os.WriteFile("debug_capture.jpg", frame, 0644)
-							log.Println("SUCCESS: Captured live frame to debug_capture.jpg")
-						})
-
-						broadcaster.Publish(frame)
-
-						content = content[start+frameLen:]
-						buffer.Reset()
-						buffer.Write(content)
-					}
-				}
-				if err != nil {
-					if err != io.EOF {
-						log.Printf("Capture Stdout error: %v", err)
-					}
-					return
-				}
-			}
-		}
-	}()
-
+	go c.readFrames(broadcaster, stdout, cmd)
 	return nil
 }
 
-// Stop terminates the capture by closing the done channel and killing
-// the ffmpeg process and its children.
+func (c *Capturer) startX11(broadcaster *stream.Broadcaster) error {
+	display := os.Getenv("DISPLAY")
+	if display == "" {
+		display = ":0"
+	}
+
+	audioSource := detectPulseAudioSource()
+	if audioSource == "" {
+		audioSource = "default"
+	}
+
+	pipeline := fmt.Sprintf(
+		"ffmpeg -y -loglevel warning -f x11grab -draw_mouse 1 -video_size 1280x720 -framerate %d -i %s "+
+			"-f pulse -i %s "+
+			"-c:v mjpeg -q:v %d -f mjpeg - "+
+			"-c:a libmp3lame -b:a 128k -f mp3 /tmp/bifrost_audio.mp3",
+		c.fps, display, audioSource, c.quality,
+	)
+	log.Printf("X11 — x11grab + pulse (%s)", audioSource)
+
+	cmd := exec.Command("sh", "-c", pipeline)
+	cmd.Env = os.Environ()
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return fmt.Errorf("stdout pipe: %w", err)
+	}
+
+	stderr, _ := cmd.StderrPipe()
+	go pipeLog(stderr, "[ffmpeg]")
+
+	if err := cmd.Start(); err != nil {
+		return fmt.Errorf("ffmpeg start: %w", err)
+	}
+	c.cmd = cmd
+
+	log.Printf("Capture engine ACTIVE — PID %d", cmd.Process.Pid)
+
+	go c.readFrames(broadcaster, stdout, cmd)
+	return nil
+}
+
+func (c *Capturer) readFrames(broadcaster *stream.Broadcaster, stdout io.ReadCloser, cmd *exec.Cmd) {
+	defer cmd.Wait()
+
+	var buffer bytes.Buffer
+	tempBuf := make([]byte, 64*1024)
+
+	for {
+		select {
+		case <-c.done:
+			return
+		default:
+			n, err := stdout.Read(tempBuf)
+			if n > 0 {
+				buffer.Write(tempBuf[:n])
+				content := buffer.Bytes()
+				for {
+					start := bytes.Index(content, []byte{0xFF, 0xD8})
+					if start == -1 {
+						if buffer.Len() > 0 {
+							lastByte := content[len(content)-1]
+							buffer.Reset()
+							buffer.WriteByte(lastByte)
+						}
+						break
+					}
+
+					end := bytes.Index(content[start:], []byte{0xFF, 0xD9})
+					if end == -1 {
+						newData := make([]byte, len(content[start:]))
+						copy(newData, content[start:])
+						buffer.Reset()
+						buffer.Write(newData)
+						break
+					}
+
+					frameLen := end + 2
+					frame := make([]byte, frameLen)
+					copy(frame, content[start:start+frameLen])
+
+					if string(broadcaster.GetHeader()) == "BRIDGE" {
+						log.Println("BRIDGE active — yielding to browser push.")
+						return
+					}
+
+					staticOnce.Do(func() {
+						_ = os.WriteFile("debug_capture.jpg", frame, 0644)
+						log.Println("First frame saved to debug_capture.jpg")
+					})
+
+					broadcaster.Publish(frame)
+
+					content = content[start+frameLen:]
+					buffer.Reset()
+					buffer.Write(content)
+				}
+			}
+			if err != nil {
+				if err != io.EOF {
+					log.Printf("Capture read error: %v", err)
+				}
+				return
+			}
+		}
+	}
+}
+
 func (c *Capturer) Stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -181,8 +200,45 @@ func (c *Capturer) Stop() {
 	}
 }
 
-// DetectPulseAudioMonitor returns the PulseAudio monitor source name
-// for audio capture. Currently a stub that returns an empty string.
-func DetectPulseAudioMonitor() string {
+func pipeLog(rc io.ReadCloser, prefix string) {
+	buf := make([]byte, 1024)
+	for {
+		n, err := rc.Read(buf)
+		if n > 0 {
+			log.Printf("%s %s", prefix, string(bytes.TrimSpace(buf[:n])))
+		}
+		if err != nil {
+			return
+		}
+	}
+}
+
+func findFile(paths ...string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+	// Last resort: try relative to this source file
+	if _, self, _, ok := runtime.Caller(0); ok {
+		return self + "/../../../scripts/portal_capture.py"
+	}
+	return paths[0]
+}
+
+func detectPulseAudioSource() string {
+	out, err := exec.Command("pactl", "list", "short", "sources").CombinedOutput()
+	if err != nil {
+		return ""
+	}
+	lines := bytes.Split(out, []byte("\n"))
+	for _, line := range lines {
+		if bytes.Contains(line, []byte("monitor")) {
+			fields := bytes.Fields(line)
+			if len(fields) >= 2 {
+				return string(fields[1])
+			}
+		}
+	}
 	return ""
 }
