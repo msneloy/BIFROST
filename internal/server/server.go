@@ -3,6 +3,7 @@ package server
 import (
 	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
+	webrtc "bifrost/internal/webrtc"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -27,6 +28,8 @@ func getIP(r *http.Request) string {
 func New(
 	tr *tracker.Tracker,
 	broadcaster *stream.Broadcaster,
+	signalingServer *webrtc.SignalingServer,
+	playerHTML string,
 ) *http.Server {
 	mux := http.NewServeMux()
 
@@ -112,6 +115,7 @@ function startBridge(){
 
 	mux.HandleFunc("/frame", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
+		tr.GetClient(ip)
 		log.Printf("[/frame] request from %s", r.RemoteAddr)
 
 		frame := broadcaster.GetLastFrame()
@@ -132,6 +136,7 @@ function startBridge(){
 
 	mux.HandleFunc("/stream", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
 		ip := getIP(r)
+		tr.GetClient(ip)
 		w.Header().Set("Content-Type", "multipart/x-mixed-replace; boundary=boundary")
 		w.Header().Set("Cache-Control", "no-cache, private")
 		w.Header().Set("Pragma", "no-cache")
@@ -265,6 +270,20 @@ function startBridge(){
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(res)
 	}))
+
+	// WebRTC signaling endpoint
+	if signalingServer != nil {
+		signalingServer.RegisterRoutes(mux)
+	}
+
+	// Player page for students
+	if playerHTML != "" {
+		mux.HandleFunc("/watch", recoverMiddleware(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+			fmt.Fprint(w, playerHTML)
+		}))
+	}
 
 	return &http.Server{
 		Handler: mux,

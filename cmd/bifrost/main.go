@@ -13,11 +13,13 @@ import (
 	"time"
 
 	"bifrost/internal/capture"
-	"bifrost/internal/dashboard"
+	"bifrost/internal/gui"
 	"bifrost/internal/mdns"
+	"bifrost/internal/player"
 	"bifrost/internal/server"
 	"bifrost/internal/stream"
 	"bifrost/internal/tracker"
+	bifrostwebrtc "bifrost/internal/webrtc"
 )
 
 const (
@@ -27,7 +29,17 @@ const (
 )
 
 func main() {
-	fmt.Print("\033[H\033[2J")
+	headless := false
+	for _, arg := range os.Args[1:] {
+		if arg == "--headless" || arg == "-headless" {
+			headless = true
+		}
+	}
+
+	if !headless {
+		fmt.Print("\033[H\033[2J")
+	}
+
 	fmt.Println(`
   ██████╗ ██╗███████╗██████╗  ██████╗ ███████╗████████╗
   ██╔══██╗██║██╔════╝██╔══██╗██╔═══██╗██╔════╝╚══██╔══╝
@@ -39,6 +51,9 @@ func main() {
 	cleanupOrphans()
 
 	localIP := getLocalIP()
+	fmt.Printf("Primary URL:   http://bifrost.local:%d\n", Port)
+	fmt.Printf("Direct IP URL: http://%s:%d\n", localIP, Port)
+	fmt.Printf("Student page:  http://%s:%d/watch\n", localIP, Port)
 
 	// Initialize components
 	tr := tracker.New()
@@ -49,13 +64,30 @@ func main() {
 	// Start mDNS
 	stopMDNS := mdns.Register(localIP)
 
-	// Start Capture (video + audio, single pipeline for sync)
+	// Start WebRTC SFU
+	sfu := bifrostwebrtc.NewSFU()
+	signalingServer := bifrostwebrtc.NewSignalingServer(sfu)
+
+	// Start RTP relay
+	relay := bifrostwebrtc.NewRelay(sfu, 5004, 5005)
+	if err := relay.Start(); err != nil {
+		log.Printf("RTP relay warning: %v (WebRTC streaming disabled)", err)
+	}
+
+	sfu.OnPeerJoin(func(id string) {
+		log.Printf("WebRTC peer connected: %s (total: %d)", id, sfu.PeerCount())
+	})
+	sfu.OnPeerLeave(func(id string) {
+		log.Printf("WebRTC peer disconnected: %s (total: %d)", id, sfu.PeerCount())
+	})
+
+	// Start Capture
 	if err := capturer.Start(broadcaster); err != nil {
 		log.Fatalf("Capture failed: %v", err)
 	}
 
-	// Start HTTP streaming server
-	srv := server.New(tr, broadcaster)
+	// Start HTTP server in background
+	srv := server.New(tr, broadcaster, signalingServer, player.HTML)
 	srv.Addr = fmt.Sprintf(":%d", Port)
 
 	go func() {
@@ -64,31 +96,32 @@ func main() {
 		}
 	}()
 
-	// Start dev watcher for auto-rebuild
+	// Start dev watcher
 	if _, err := exec.LookPath("go"); err == nil {
 		startWatcher()
 	}
 
-	// Launch terminal dashboard (blocks — runs until SIGINT/SIGTERM)
-	fmt.Print("\033[?25l")
-	go func() {
-		time.Sleep(500 * time.Millisecond)
-		dashboard.Start(tr, broadcaster, localIP, AppVersion)
-	}()
-
-	// Wait for shutdown
+	// Setup signal handler for graceful shutdown
 	sigs := make(chan os.Signal, 1)
 	signal.Notify(sigs, syscall.SIGINT, syscall.SIGTERM)
-	<-sigs
+	go func() {
+		<-sigs
+		// Signal Fyne to quit, then cleanup happens after gui.Run returns
+		fmt.Print("\033[?25h")
+		fmt.Println("\nShutting down BIFROST...")
+	}()
 
-	fmt.Print("\033[?25h")
-	fmt.Println("\nShutting down BIFROST...")
+	// GUI runs on main goroutine (Fyne requirement) — blocks until quit
+	gui.Run(tr, broadcaster, capturer, localIP, AppVersion, headless)
 
+	// Cleanup after GUI exits
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
 
 	srv.Shutdown(ctx)
 	capturer.Stop()
+	relay.Stop()
+	sfu.Close()
 	for _, stop := range stopMDNS {
 		stop()
 	}
