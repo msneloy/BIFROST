@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BIFROST - Live Stream</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0000;color:#fff;font-family:'Courier New',monospace;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+#video-container{flex:1;display:flex;align-items:center;justify-content:center;background:#000;position:relative}
+video{max-width:100%;max-height:100%;object-fit:contain}
+.hud{position:absolute;top:10px;left:10px;z-index:10;background:rgba(170,0,0,0.85);border:1px solid #ff3333;padding:6px 12px;border-radius:4px;font-size:13px;font-weight:bold}
+.hud .dot{display:inline-block;width:8px;height:8px;background:#0f0;border-radius:50%;margin-right:6px;animation:blink 1s infinite alternate}
+@keyframes blink{from{opacity:.3}to{opacity:1}}
+.stats{position:absolute;bottom:10px;left:10px;z-index:10;font-size:11px;color:#888;background:rgba(0,0,0,0.7);padding:6px 10px;border-radius:4px}
+#connecting{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#ff3333}
+#connecting h2{margin-bottom:10px}
+</style>
+</head>
+<body>
+<div id="video-container">
+  <video id="video" autoplay playsinline></video>
+  <div class="hud">
+    <span class="dot" id="dot"></span>
+    <span id="label">CONNECTING...</span>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div id="connecting">
+    <h2>BIFROST</h2>
+    <p>Establishing connection...</p>
+  </div>
+</div>
+<script>
+const video = document.getElementById('video');
+const dot = document.getElementById('dot');
+const label = document.getElementById('label');
+const statsEl = document.getElementById('stats');
+const connecting = document.getElementById('connecting');
+
+let pc = null;
+let startTime = Date.now();
+
+async function connect() {
+  try {
+    pc = new RTCPeerConnection({ iceServers: [] }); // No STUN/TURN on LAN
+
+    pc.ontrack = (event) => {
+      if (event.track.kind === 'video' || event.track.kind === 'audio') {
+        if (!video.srcObject) {
+          video.srcObject = new MediaStream();
+        }
+        video.srcObject.addTrack(event.track);
+        connecting.style.display = 'none';
+        label.textContent = 'LIVE';
+        dot.style.background = '#00ff00';
+      }
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      const state = pc.iceConnectionState;
+      if (state === 'connected' || state === 'completed') {
+        label.textContent = 'LIVE';
+        dot.style.background = '#00ff00';
+      } else if (state === 'disconnected' || state === 'failed') {
+        label.textContent = 'RECONNECTING...';
+        dot.style.background = '#ff0000';
+        setTimeout(connect, 2000);
+      }
+    };
+
+    // Create offer
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    // Send offer to server
+    const response = await fetch('/webrtc/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp })
+    });
+
+    if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+    const answer = await response.json();
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: answer.sdp }));
+
+  } catch (err) {
+    console.error('Connection failed:', err);
+    label.textContent = 'ERROR';
+    dot.style.background = '#ff0000';
+    setTimeout(connect, 3000);
+  }
+}
+
+// Update stats
+setInterval(() => {
+  if (!pc) return;
+  const stats = pc.getStats();
+  stats.then(report => {
+    let info = [];
+    report.forEach(s => {
+      if (s.type === 'inbound-rtp' && s.kind === 'video') {
+        const now = Date.now();
+        const elapsed = (now - startTime) / 1000;
+        const fps = s.framesPerSecond || 0;
+        const bitrate = s.bytesReceived ? Math.round(s.bytesReceived * 8 / elapsed / 1000) : 0;
+        info.push(`${fps} fps | ${bitrate} kbps | ${s.framesDecoded || 0} frames`);
+      }
+      if (s.type === 'candidate-pair' && s.state === 'succeeded') {
+        const rtt = s.currentRoundTripTime ? Math.round(s.currentRoundTripTime * 1000) : '--';
+        info.push(`RTT: ${rtt}ms`);
+      }
+    });
+    statsEl.textContent = info.join(' | ');
+  });
+}, 2000);
+
+connect();
+</script>
+</body>
+</html>

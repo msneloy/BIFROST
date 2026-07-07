@@ -16,11 +16,13 @@ import (
 var staticOnce sync.Once
 
 type Capturer struct {
-	fps     int
-	quality int
-	cmd     *exec.Cmd
-	done    chan struct{}
-	mu      sync.Mutex
+	fps         int
+	quality     int
+	cmd         *exec.Cmd
+	done        chan struct{}
+	broadcaster *stream.Broadcaster
+	wg          sync.WaitGroup
+	mu          sync.Mutex
 }
 
 func NewCapturer(fps, quality int) *Capturer {
@@ -37,6 +39,14 @@ func NewCapturer(fps, quality int) *Capturer {
 func (c *Capturer) Start(broadcaster *stream.Broadcaster) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+
+	if broadcaster != nil {
+		c.broadcaster = broadcaster
+	}
+	broadcaster = c.broadcaster
+	if broadcaster == nil {
+		return fmt.Errorf("no broadcaster set")
+	}
 
 	sessionType := os.Getenv("XDG_SESSION_TYPE")
 
@@ -72,7 +82,11 @@ func (c *Capturer) startMutter(broadcaster *stream.Broadcaster) error {
 
 	log.Printf("Portal capture PID %d", cmd.Process.Pid)
 
-	go c.readFrames(broadcaster, stdout, cmd)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.readFrames(broadcaster, stdout, cmd)
+	}()
 	return nil
 }
 
@@ -113,7 +127,11 @@ func (c *Capturer) startX11(broadcaster *stream.Broadcaster) error {
 
 	log.Printf("Capture engine ACTIVE — PID %d", cmd.Process.Pid)
 
-	go c.readFrames(broadcaster, stdout, cmd)
+	c.wg.Add(1)
+	go func() {
+		defer c.wg.Done()
+		c.readFrames(broadcaster, stdout, cmd)
+	}()
 	return nil
 }
 
@@ -156,7 +174,7 @@ func (c *Capturer) readFrames(broadcaster *stream.Broadcaster, stdout io.ReadClo
 					frame := make([]byte, frameLen)
 					copy(frame, content[start:start+frameLen])
 
-					if string(broadcaster.GetHeader()) == "BRIDGE" {
+					if broadcaster != nil && string(broadcaster.GetHeader()) == "BRIDGE" {
 						log.Println("BRIDGE active — yielding to browser push.")
 						return
 					}
@@ -185,10 +203,10 @@ func (c *Capturer) readFrames(broadcaster *stream.Broadcaster, stdout io.ReadClo
 
 func (c *Capturer) Stop() {
 	c.mu.Lock()
-	defer c.mu.Unlock()
 
 	select {
 	case <-c.done:
+		c.mu.Unlock()
 		return
 	default:
 		close(c.done)
@@ -197,6 +215,26 @@ func (c *Capturer) Stop() {
 	if c.cmd != nil && c.cmd.Process != nil {
 		_ = exec.Command("pkill", "-9", "-P", fmt.Sprintf("%d", c.cmd.Process.Pid)).Run()
 		c.cmd.Process.Kill()
+	}
+	c.mu.Unlock()
+
+	c.wg.Wait()
+}
+
+// StopCapture is a public alias for Stop, used by the GUI controls.
+func (c *Capturer) StopCapture() {
+	c.Stop()
+}
+
+// SetParams allows the GUI to change capture quality at runtime.
+func (c *Capturer) SetParams(fps, quality int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if fps > 0 {
+		c.fps = fps
+	}
+	if quality > 0 {
+		c.quality = quality
 	}
 }
 

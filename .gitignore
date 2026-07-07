@@ -1,6 +1,7 @@
 # BIFROST Build Artifacts
 bifrost
 bifrost.exe
+bifrost_old
 
 # Logs & Diagnostics
 *.log
@@ -26,3 +27,12 @@ scripts/wayland_capture.py
 *.bin
 *.mjpg
 *.pw
+
+# IDE / Tooling
+.mimocode/
+.mimocode/*
+.idea/
+.vscode/
+*.swp
+*.swo
+*~

@@ -44,6 +44,7 @@ proc = subprocess.Popen(
     ['gst-launch-1.0', '-v',
      'pipewiresrc', f'path={nid_val}',
      '!', 'capsfilter', 'caps=video/x-raw,format=BGRx,width=1920,height=1080',
+     '!', 'videorate', 'max-rate=15',
      '!', 'videoconvert',
      '!', 'jpegenc', 'quality=40',
      '!', 'filesink', 'location=/dev/stdout'],
