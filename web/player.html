@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>BIFROST - Live Stream</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{background:#0a0000;color:#fff;font-family:'Courier New',monospace;height:100vh;overflow:hidden;display:flex;flex-direction:column}
+#video-container{flex:1;display:flex;align-items:center;justify-content:center;background:#000;position:relative}
+video,img{max-width:100%;max-height:100%;object-fit:contain}
+.hud{position:absolute;top:10px;left:10px;z-index:10;background:rgba(170,0,0,0.85);border:1px solid #ff3333;padding:6px 12px;border-radius:4px;font-size:13px;font-weight:bold}
+.hud .dot{display:inline-block;width:8px;height:8px;background:#0f0;border-radius:50%;margin-right:6px;animation:blink 1s infinite alternate}
+@keyframes blink{from{opacity:.3}to{opacity:1}}
+.hud .latency{margin-left:8px;opacity:0.8;font-weight:normal;font-size:12px}
+.controls{position:absolute;top:10px;right:10px;z-index:10;display:flex;gap:4px}
+.ctrl-btn{background:rgba(170,0,0,0.85);border:1px solid #ff3333;color:#fff;font-family:'Courier New',monospace;font-size:13px;font-weight:bold;padding:5px 10px;border-radius:4px;cursor:pointer;transition:background 0.15s}
+.ctrl-btn:hover{background:rgba(255,51,51,0.9)}
+.ctrl-btn:active{background:rgba(255,0,0,1)}
+.stats{position:absolute;bottom:10px;left:10px;z-index:10;font-size:11px;color:#888;background:rgba(0,0,0,0.7);padding:6px 10px;border-radius:4px}
+#connecting{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;color:#ff3333}
+#connecting h2{margin-bottom:10px}
+#connecting p{color:#888}
+</style>
+</head>
+<body>
+<div id="video-container">
+  <video id="video" autoplay playsinline style="display:none"></video>
+  <img id="mjpeg" style="display:none" />
+  <div class="hud">
+    <span class="dot" id="dot"></span>
+    <span id="label">CONNECTING...</span>
+    <span class="latency" id="latency"></span>
+  </div>
+  <div class="controls">
+    <button class="ctrl-btn" id="btn-sync" title="Sync feed">&#x21bb; Sync</button>
+    <button class="ctrl-btn" id="btn-refresh" title="Refresh page">&#x21ba; Refresh</button>
+    <button class="ctrl-btn" id="btn-fullscreen" title="Toggle fullscreen">&#x26F6; Full</button>
+  </div>
+  <div class="stats" id="stats"></div>
+  <div id="connecting">
+    <h2>BIFROST</h2>
+    <p>Establishing connection...</p>
+  </div>
+</div>
+<script>
+const video = document.getElementById('video');
+const mjpeg = document.getElementById('mjpeg');
+const dot = document.getElementById('dot');
+const label = document.getElementById('label');
+const latencyEl = document.getElementById('latency');
+const statsEl = document.getElementById('stats');
+const connecting = document.getElementById('connecting');
+
+let pc = null;
+let startTime = Date.now();
+let lastRTT = null;
+let mode = 'auto'; // 'webrtc', 'mjpeg', 'auto'
+let retryCount = 0;
+
+// ─── Client fingerprinting ───────────────────────────────────────────────
+function getDeviceInfo() {
+  const ua = navigator.userAgent;
+  let os = 'Unknown', browser = 'Unknown', device = 'desktop';
+
+  if (/android/i.test(ua)) { os = 'Android'; device = 'mobile'; }
+  else if (/iphone|ipad/i.test(ua)) { os = 'iOS'; device = 'mobile'; }
+  else if (/linux/i.test(ua)) os = 'Linux';
+  else if (/mac/i.test(ua)) { os = 'macOS'; }
+  else if (/windows/i.test(ua)) { os = 'Windows'; }
+
+  if (/chrome/i.test(ua) && !/edg/i.test(ua)) browser = 'Chrome';
+  else if (/firefox/i.test(ua)) browser = 'Firefox';
+  else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = 'Safari';
+  else if (/edg/i.test(ua)) browser = 'Edge';
+
+  let gpu = 'Unknown';
+  try {
+    const canvas = document.createElement('canvas');
+    const gl = canvas.getContext('webgl');
+    if (gl) {
+      const ext = gl.getExtension('WEBGL_debug_renderer_info');
+      if (ext) gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+    }
+  } catch(e) {}
+
+  const resolution = `${screen.width}x${screen.height}`;
+
+  let battery = 'N/A', charging = false;
+  if (navigator.getBattery) {
+    navigator.getBattery().then(b => {
+      battery = Math.round(b.level * 100);
+      charging = b.charging;
+      sendPing({ battery, charging });
+    });
+  }
+
+  return { os, browser, device, gpu, resolution };
+}
+
+// ─── Telemetry ping ──────────────────────────────────────────────────────
+function sendPing(extra = {}) {
+  const info = getDeviceInfo();
+  const params = new URLSearchParams({
+    latency: lastRTT || '',
+    os: info.os,
+    browser: info.browser,
+    resolution: info.resolution,
+    device: info.device,
+    gpu: info.gpu,
+    battery: extra.battery || '',
+    charging: extra.charging || ''
+  });
+  fetch(`/ping?${params}`).catch(() => {});
+}
+
+setInterval(sendPing, 2000);
+
+// ─── WebRTC connection ───────────────────────────────────────────────────
+function destroyPC() {
+  if (pc) {
+    pc.ontrack = null;
+    pc.oniceconnectionstatechange = null;
+    pc.close();
+    pc = null;
+  }
+}
+
+async function connectWebRTC() {
+  try {
+    destroyPC();
+    pc = new RTCPeerConnection({ iceServers: [] });
+
+    pc.addTransceiver('video', { direction: 'recvonly' });
+    pc.addTransceiver('audio', { direction: 'recvonly' });
+
+    pc.ontrack = (event) => {
+      if (!video.srcObject) {
+        video.srcObject = new MediaStream();
+      }
+      video.srcObject.addTrack(event.track);
+      video.style.display = 'block';
+      mjpeg.style.display = 'none';
+      connecting.style.display = 'none';
+      label.textContent = 'LIVE';
+      dot.style.background = '#00ff00';
+      mode = 'webrtc';
+    };
+
+    pc.oniceconnectionstatechange = () => {
+      const state = pc.iceConnectionState;
+      if (state === 'connected' || state === 'completed') {
+        label.textContent = 'LIVE';
+        dot.style.background = '#00ff00';
+        retryCount = 0;
+      } else if (state === 'disconnected' || state === 'failed') {
+        label.textContent = 'RECONNECTING...';
+        dot.style.background = '#ff0000';
+        latencyEl.textContent = '';
+        // Fallback to MJPEG after 2 failed retries
+        retryCount++;
+        if (retryCount >= 2) {
+          console.log('WebRTC failed, falling back to MJPEG');
+          connectMJPEG();
+        } else {
+          setTimeout(connectWebRTC, 2000);
+        }
+      }
+    };
+
+    const offer = await pc.createOffer();
+    await pc.setLocalDescription(offer);
+
+    const response = await fetch('/webrtc/offer', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sdp: pc.localDescription.sdp })
+    });
+
+    if (!response.ok) throw new Error(`Server error: ${response.status}`);
+
+    const data = await response.json();
+    if (data.error) throw new Error(data.error);
+
+    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
+
+  } catch (err) {
+    console.error('WebRTC failed:', err);
+    retryCount++;
+    if (retryCount >= 2) {
+      connectMJPEG();
+    } else {
+      setTimeout(connectWebRTC, 2000);
+    }
+  }
+}
+
+// ─── MJPEG fallback ──────────────────────────────────────────────────────
+function connectMJPEG() {
+  destroyPC();
+  mode = 'mjpeg';
+  connecting.style.display = 'none';
+  mjpeg.style.display = 'block';
+  video.style.display = 'none';
+  dot.style.background = '#00ff00';
+  label.textContent = 'LIVE (MJPEG)';
+
+  // Add cache-busting to force reconnection
+  function refreshFrame() {
+    mjpeg.src = '/frame?t=' + Date.now();
+  }
+  mjpeg.onload = mjpeg.onerror = () => setTimeout(refreshFrame, 33);
+  refreshFrame();
+}
+
+// ─── Stats update ────────────────────────────────────────────────────────
+setInterval(() => {
+  if (pc && mode === 'webrtc') {
+    pc.getStats().then(report => {
+      let info = [];
+      report.forEach(s => {
+        if (s.type === 'inbound-rtp' && s.kind === 'video') {
+          const elapsed = (Date.now() - startTime) / 1000;
+          const fps = s.framesPerSecond || 0;
+          const bitrate = s.bytesReceived ? Math.round(s.bytesReceived * 8 / elapsed / 1000) : 0;
+          info.push(`${fps} fps | ${bitrate} kbps | ${s.framesDecoded || 0} frames`);
+        }
+        if (s.type === 'candidate-pair' && s.state === 'succeeded') {
+          const rtt = s.currentRoundTripTime ? Math.round(s.currentRoundTripTime * 1000) : null;
+          if (rtt !== null) {
+            lastRTT = rtt;
+            latencyEl.textContent = `${rtt}ms`;
+          }
+        }
+      });
+      if (info.length > 0) statsEl.textContent = info.join(' | ');
+    });
+  }
+}, 2000);
+
+// ─── Controls ────────────────────────────────────────────────────────────
+document.getElementById('btn-sync').addEventListener('click', () => {
+  label.textContent = 'SYNCING...';
+  dot.style.background = '#ffaa00';
+  latencyEl.textContent = '';
+  startTime = Date.now();
+  retryCount = 0;
+  if (mode === 'webrtc') connectWebRTC();
+  else connectMJPEG();
+});
+
+document.getElementById('btn-refresh').addEventListener('click', () => {
+  location.reload();
+});
+
+document.getElementById('btn-fullscreen').addEventListener('click', () => {
+  const el = document.getElementById('video-container');
+  if (!document.fullscreenElement) {
+    el.requestFullscreen().catch(() => {});
+  } else {
+    document.exitFullscreen();
+  }
+});
+
+// ─── Init: try WebRTC first, fallback to MJPEG ──────────────────────────
+connectWebRTC();
+
+// If no WebRTC connection after 5 seconds, switch to MJPEG
+setTimeout(() => {
+  if (mode === 'auto') {
+    console.log('WebRTC timeout, trying MJPEG');
+    connectMJPEG();
+  }
+}, 5000);
+</script>
+</body>
+</html>

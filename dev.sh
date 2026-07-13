@@ -1,58 +1,47 @@
 #!/usr/bin/env bash
-# dev.sh — auto-rebuild and restart BIFROST on source changes
+# dev.sh — Development auto-restart for BIFROST
 set -uo pipefail
 
 DIR="$(cd "$(dirname "$0")" && pwd)"
-BINARY="$DIR/bifrost"
-LOG="/tmp/bifrost.log"
-PIDFILE="/tmp/bifrost.pid"
+LOG="/tmp/bifrost/bifrost.log"
+PIDFILE="/tmp/bifrost/pids/dev"
 
 stop_bifrost() {
     if [[ -f "$PIDFILE" ]]; then
         local pid
         pid=$(cat "$PIDFILE")
         kill -9 "$pid" 2>/dev/null || true
-        # Also kill child ffmpeg
         pkill -9 -P "$pid" 2>/dev/null || true
         rm -f "$PIDFILE"
     fi
+    pkill -9 -f 'bifrost.sh' 2>/dev/null || true
     pkill -9 -f 'ffmpeg.*(x11grab|kmsgrab)' 2>/dev/null || true
+    pkill -9 -f 'frame_splitter.py' 2>/dev/null || true
     sleep 0.2
 }
 
 start_bifrost() {
     stop_bifrost
-    rm -f /tmp/bifrost_audio.mp3
-    "$BINARY" > "$LOG" 2>&1 &
+    mkdir -p /tmp/bifrost/frames /tmp/bifrost/audio /tmp/bifrost/pids
+    bash "$DIR/bifrost.sh" --headless > "$LOG" 2>&1 &
     echo $! > "$PIDFILE"
     echo "[dev] BIFROST started (PID $!)"
 }
 
-build() {
-    echo "[dev] Building..."
-    if go build -o "$BINARY" "$DIR/cmd/bifrost" 2>&1; then
-        echo "[dev] Build OK"
-        return 0
-    else
-        echo "[dev] Build FAILED"
-        return 1
-    fi
-}
-
 trap 'stop_bifrost; exit 0' INT TERM
 
-# Initial build and start
-build && start_bifrost
+# Initial start
+start_bifrost
 
 echo "[dev] Watching for changes (inotifywait)..."
 
 while true; do
     inotifywait -qq -r -e modify,create,delete,move \
-        --include '\.(go|html|tmpl|mod)$' \
-        "$DIR/cmd" "$DIR/internal" 2>/dev/null || break
-    echo "[dev] Change detected — rebuilding..."
+        --include '\.(sh|py|html)$' \
+        "$DIR/lib" "$DIR/web" "$DIR/scripts" "$DIR/bifrost.sh" 2>/dev/null || break
+    echo "[dev] Change detected — restarting..."
     sleep 0.3
-    build && start_bifrost
+    start_bifrost
 done
 
 echo "[dev] inotifywait exited, stopping..."

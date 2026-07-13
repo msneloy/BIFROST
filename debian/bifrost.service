@@ -1,12 +1,18 @@
 [Unit]
-Description=BIFROST Screen Broadcasting
+Description=BIFROST Screen Broadcasting Server
 After=network.target avahi-daemon.service display-manager.service
+Wants=avahi-daemon.service
 
 [Service]
-ExecStart=/usr/local/bin/bifrost
+Type=simple
+ExecStart=/opt/bifrost/bifrost.sh --headless
 Restart=always
+RestartSec=3
 User=root
-Environment=XDG_SESSION_TYPE=wayland
+WorkingDirectory=/opt/bifrost
+Environment=HOME=/root
+StandardOutput=journal
+StandardError=journal
 
 [Install]
 WantedBy=multi-user.target

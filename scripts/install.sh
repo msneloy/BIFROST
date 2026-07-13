@@ -1,58 +1,38 @@
 #!/bin/bash
-# bifrost-install.sh
-# Universal, self-contained BIFROST installer.
-# No internet, no package manager required.
+# bifrost-install.sh — Universal BIFROST installer
+# Installs BIFROST to /opt/bifrost and creates /usr/local/bin/bifrost wrapper.
 
-# Check for root
-if [ "$EUID" -ne 0 ]; then
-  echo "Please run as root (sudo bash install.sh)"
-  exit 1
+set -euo pipefail
+
+if [[ "$EUID" -ne 0 ]]; then
+    echo "Please run as root: sudo bash install.sh"
+    exit 1
 fi
 
 INSTALL_DIR="/opt/bifrost"
-BIN_DIR="/usr/local/bin"
-LIB_DIR="$INSTALL_DIR/lib"
-GST_DIR="$INSTALL_DIR/gstreamer-1.0"
+BIN_LINK="/usr/local/bin/bifrost"
+SCRIPT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "Installing BIFROST to $INSTALL_DIR..."
 
-mkdir -p "$INSTALL_DIR" "$LIB_DIR" "$GST_DIR" "$INSTALL_DIR/bin"
+# Create directories
+mkdir -p "$INSTALL_DIR/lib" "$INSTALL_DIR/web" "$INSTALL_DIR/scripts"
 
-# Extract embedded archive (if it exists)
-# In the final build, the tarball will be appended after exit
-ARCHIVE_START=$(awk '/^__ARCHIVE__/{print NR+1; exit}' "$0")
-if [ -n "$ARCHIVE_START" ]; then
-    tail -n +"$ARCHIVE_START" "$0" | tar -xz -C "$INSTALL_DIR" 2>/dev/null || echo "Info: No embedded archive found (yet)."
-fi
+# Copy files
+cp "$SCRIPT_DIR/bifrost.sh" "$INSTALL_DIR/"
+cp "$SCRIPT_DIR/lib/"*.sh "$INSTALL_DIR/lib/"
+cp "$SCRIPT_DIR/lib/"*.py "$INSTALL_DIR/lib/" 2>/dev/null || true
+cp "$SCRIPT_DIR/web/"*.html "$INSTALL_DIR/web/"
+cp "$SCRIPT_DIR/scripts/"*.py "$INSTALL_DIR/scripts/" 2>/dev/null || true
 
-# Copy local vendor files if we are running in the repo
-if [ -d "vendor" ]; then
-    cp -r vendor/lib/* "$LIB_DIR/" 2>/dev/null
-    cp -r vendor/gstreamer-1.0/* "$GST_DIR/" 2>/dev/null
-    cp -r vendor/bin/* "$INSTALL_DIR/bin/" 2>/dev/null
-fi
+# Make executable
+chmod +x "$INSTALL_DIR/bifrost.sh"
+chmod +x "$INSTALL_DIR/lib/"*.sh
+chmod +x "$INSTALL_DIR/lib/"*.py 2>/dev/null || true
+chmod +x "$INSTALL_DIR/scripts/"*.py 2>/dev/null || true
 
-# Install bifrost binary from current dir if exists
-if [ -f "bifrost" ]; then
-    cp "bifrost" "$INSTALL_DIR/bin/bifrost-bin"
-else
-    echo "Warning: binary 'bifrost' not found in current directory."
-fi
-
-# Create wrapper script
-cat > "$BIN_DIR/bifrost" << EOF
-#!/bin/bash
-export GST_PLUGIN_PATH=$GST_DIR
-export GST_PLUGIN_SYSTEM_PATH=$GST_DIR
-export LD_LIBRARY_PATH=$LIB_DIR
-export PATH=$INSTALL_DIR/bin:\$PATH
-exec $INSTALL_DIR/bin/bifrost-bin "\$@"
-EOF
-chmod +x "$BIN_DIR/bifrost"
-
-# Register libraries
-echo "$LIB_DIR" > /etc/ld.so.conf.d/bifrost.conf
-ldconfig
+# Create wrapper symlink
+ln -sf "$INSTALL_DIR/bifrost.sh" "$BIN_LINK"
 
 # Enable avahi-daemon
 if command -v systemctl &>/dev/null; then
@@ -60,10 +40,15 @@ if command -v systemctl &>/dev/null; then
     systemctl start avahi-daemon 2>/dev/null || true
 fi
 
-echo "------------------------------------------------"
-echo "BIFROST version 0.1.0 installed successfully!"
-echo "Run it anywhere using the command: bifrost"
-echo "------------------------------------------------"
-
-exit 0
-__ARCHIVE__
+echo ""
+echo "--------------------------------------------"
+echo "BIFROST v0.2.0 installed successfully!"
+echo ""
+echo "Run anywhere: bifrost"
+echo "Or directly:  /opt/bifrost/bifrost.sh"
+echo "--------------------------------------------"
+echo ""
+echo "Quick start:"
+echo "  sudo bifrost              # with TUI dashboard"
+echo "  sudo bifrost --headless   # without dashboard"
+echo "  sudo bifrost --no-webrtc  # MJPEG only"
