@@ -35,20 +35,31 @@ Auto-rebuilds and restarts BIFROST on any `.go` or `.html` file change.
 ## Project Structure
 
 ```
-cmd/bifrost/main.go          — Application entrypoint & orchestration
+main.go                     — Application entrypoint & orchestration
+embed_assets.go             — go:embed for web/player.html + web/admin.html
 internal/
-  capture/capture.go         — Screen & audio capture (ffmpeg)
-  dashboard/dashboard.go     — Terminal TUI dashboard with system stats
-  guard/guard.go             — Windows client rejection middleware
-  mdns/mdns.go               — mDNS service registration (avahi-publish)
-  server/server.go           — HTTP server with routes & middleware
-  stream/stream.go           — Publish/subscribe broadcast mechanism
-  tracker/tracker.go         — Client tracking & bandwidth monitoring
-  watcher/watcher.go         — Hot-reload file watcher for dev
+  config/config.go          — CLI flags, config parsing
+  capture/capture.go        — Unified screen & audio capture (ffmpeg)
+  capture/broadcaster.go    — Video frame pub/sub broadcaster
+  capture/audio.go          — Audio chunk pub/sub broadcaster
+  capture/frames.go         — MJPEG frame splitter (SOI/EOI markers)
+  capture/ringbuffer.go     — Ring buffer for latest frames
+  server/server.go          — HTTP server with routes
+  server/handler_*.go       — HTTP endpoint handlers
+  server/guard.go           — Windows client rejection middleware
+  webrtc/manager.go         — Pion WebRTC peer connection manager
+  webrtc/rtp_receiver.go    — UDP RTP packet receiver for WebRTC
+  tracker/tracker.go        — Client tracking & bandwidth monitoring
+  stats/stats.go            — System metrics from /proc and /sys
+  dashboard/dashboard.go    — Terminal TUI dashboard (--headless fallback)
+  mdns/mdns.go              — mDNS service registration (avahi-publish)
 web/
-  web.go                     — Embedded HTML via go:embed
-  templates/viewer.html      — Web viewer frontend (HTML/CSS/JS)
-debian/                      — systemd service & .deb packaging
+  player.html               — Student viewer (WebRTC + MJPEG fallback)
+  admin.html                — Teacher admin dashboard
+scripts/
+  mutter_capture.py         — Wayland capture via Mutter ScreenCast
+  capture.py                — Wayland capture via xdg-desktop-portal
+debian/                     — systemd service & .deb packaging
 ```
 
 ## Coding Conventions

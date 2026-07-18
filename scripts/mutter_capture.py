@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 """Zero-interaction screen capture: Mutter ScreenCast -> PipeWire -> GStreamer.
 
+Single unified pipeline — video and audio share the same GStreamer clock
+for perfect RTP timestamp synchronization.
+
 Outputs:
   - MJPEG to stdout (for HTTP viewer)
   - VP8 RTP to UDP 127.0.0.1:5004 (for WebRTC video)
@@ -65,49 +68,42 @@ def drain_stderr(proc, label):
         line = proc.stderr.readline()
         if not line:
             break
-        # Only log errors, not verbose GStreamer output
         text = line.decode(errors='replace').strip()
         if 'error' in text.lower() or 'ERROR' in text:
             log(f'{label} {text}')
 
-# --- Video pipeline: tee to both MJPEG stdout and VP8 RTP ---
-video_pipeline = (
+# --- Detect audio source ---
+audio_source = detect_monitor_source()
+
+# --- Single unified pipeline: video + audio share one GStreamer clock ---
+# This ensures RTP timestamps are synchronized for perfect A/V sync in WebRTC.
+pipeline_str = (
     f'pipewiresrc path={nid_val} '
     f'! capsfilter caps=video/x-raw,format=BGRx,width=1920,height=1080 '
-    f'! videorate max-rate=15 '
+    f'! videorate max-rate=30 '
     f'! videoconvert '
-    f'! tee name=t '
-    f't. ! queue ! jpegenc quality=40 ! filesink location=/dev/stdout '
-    f't. ! queue ! vp8enc threads=4 deadline=1 ! rtpvp8pay ! '
+    f'! tee name=vt '
+    f'vt. ! queue max-size-buffers=1 leaky=downstream ! jpegenc quality=40 ! filesink location=/dev/stdout '
+    f'vt. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=2 deadline=1 cpu-used=8 ! rtpvp8pay ! '
     f'udpsink host=127.0.0.1 port=5004 sync=false'
 )
 
-log('Video: MJPEG stdout + VP8 RTP → :5004')
-video_proc = subprocess.Popen(
-    ['gst-launch-1.0', '-v'] + video_pipeline.split(),
-    stdout=sys.stdout.buffer, stderr=subprocess.PIPE)
-threading.Thread(target=drain_stderr, args=(video_proc, '[video]'), daemon=True).start()
-
-# --- Audio pipeline: PulseAudio monitor → Opus RTP ---
-audio_source = detect_monitor_source()
 if audio_source:
-    log(f'Audio: PulseAudio monitor ({audio_source}) → Opus RTP → :5005')
-    audio_pipeline = (
-        f'pulsesrc device={audio_source} '
+    pipeline_str += (
+        f' pulsesrc device={audio_source} '
         f'! audioconvert '
-        f'! opusenc bitrate=64000 '
-        f'! rtpopuspay '
-        f'! udpsink host=127.0.0.1 port=5005 sync=false'
+        f'! opusenc bitrate=64000 audio-type=restricted-lowdelay '
+        f'! rtpopuspay ! '
+        f'udpsink host=127.0.0.1 port=5005 sync=false'
     )
-    audio_proc = subprocess.Popen(
-        ['gst-launch-1.0', '-v'] + audio_pipeline.split(),
-        stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
-    threading.Thread(target=drain_stderr, args=(audio_proc, '[audio]'), daemon=True).start()
+    log(f'Unified pipeline: MJPEG stdout + VP8 RTP :5004 + Opus RTP :5005')
+    log(f'Audio source: {audio_source}')
 else:
-    log('Audio: no PulseAudio monitor source found — audio disabled')
-    audio_proc = None
+    log('Unified pipeline: MJPEG stdout + VP8 RTP :5004 (no audio)')
 
-# Wait for video process (primary)
-video_proc.wait()
-if audio_proc:
-    audio_proc.terminate()
+proc = subprocess.Popen(
+    ['gst-launch-1.0', '-v'] + pipeline_str.split(),
+    stdout=sys.stdout.buffer, stderr=subprocess.PIPE)
+threading.Thread(target=drain_stderr, args=(proc, '[gst]'), daemon=True).start()
+
+proc.wait()

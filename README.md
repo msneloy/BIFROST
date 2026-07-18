@@ -4,27 +4,23 @@
 
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/nelobster/BIFROST)
-[![Shell](https://img.shields.io/badge/shell-bash-green)](https://www.gnu.org/software/bash/)
+[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org/)
 
-BIFROST is a zero-configuration **classroom screen broadcasting server** written entirely in Bash. It streams a teacher's desktop (video + audio) to student browsers over a local network via MJPEG and WebRTC. No client software required — just open a browser.
+BIFROST is a zero-configuration **classroom screen broadcasting server** written in Go. It streams a teacher's desktop (video + audio) to student browsers over a local network via MJPEG and WebRTC. No client software required — just open a browser.
 
 ---
 
 ## Features
 
-- **Screen Capture** — Captures display via `ffmpeg` (X11) or GStreamer/PipeWire (Wayland)
-- **Audio Streaming** — System audio via PulseAudio as MP3
-- **Dual Streaming** — WebRTC (low-latency) with automatic MJPEG fallback
+- **Unified Capture** — Single ffmpeg process captures video + audio for perfect sync
+- **Dual Streaming** — WebRTC (low-latency, VP8+Opus) with automatic MJPEG fallback
 - **Web Viewer** — Browser-based viewer with HUD overlay, sync/refresh/fullscreen controls
+- **Admin Dashboard** — Web-based control panel at `/admin` with live preview, system stats, client list
 - **mDNS Discovery** — Automatic LAN registration via `avahi-publish` (`bifrost.local`)
-- **TUI Dashboard** — BASHTOP-inspired terminal dashboard with:
-  - System stats (CPU, RAM, GPU, disk, swap, NIC, battery, fan, temperatures)
-  - Connected students with bandwidth, device type, OS/browser
-  - Rejected client log
+- **TUI Dashboard** — Terminal dashboard fallback (`--headless`) with system stats
 - **Client Tracking** — IP, hostname, MAC, bandwidth, OS, browser, GPU, battery
 - **Windows Guard** — Automatic Windows client rejection with styled 403 page
 - **Health Endpoint** — JSON health check at `/health`
-- **Debian Packaging** — Ready-to-install `.deb` with systemd service
 
 ---
 
@@ -33,29 +29,22 @@ BIFROST is a zero-configuration **classroom screen broadcasting server** written
 ### Prerequisites
 
 - **ffmpeg** — `sudo apt-get install ffmpeg`
-- **socat** — `sudo apt-get install socat`
-- **python3** — `sudo apt-get install python3`
-- **avahi-daemon & avahi-utils** — `sudo apt-get install avahi-daemon avahi-utils`
-- **mediamtx** (optional) — For WebRTC support
+- **PulseAudio** — For system audio capture (most Linux distros have this)
+- **avahi-daemon & avahi-utils** (optional) — For mDNS discovery (`bifrost.local`)
+- **python3 + GStreamer** (optional) — For Wayland capture
 
-### Install & Run
+### Build & Run
 
 ```bash
 # Clone the repo
 git clone https://github.com/nelobster/BIFROST.git
 cd BIFROST
 
-# Install (copies to /opt/bifrost, creates /usr/local/bin/bifrost)
-sudo bash scripts/install.sh
+# Build
+go build -o bifrost .
 
 # Run
-sudo bifrost
-```
-
-### Run from source (without install)
-
-```bash
-sudo bash bifrost.sh
+./bifrost
 ```
 
 ### Options
@@ -77,40 +66,46 @@ bifrost [OPTIONS]
 ## Architecture
 
 ```
-bifrost.sh (main)
-├── lib/capture.sh       ffmpeg screen/audio capture
-├── lib/frame_splitter.py  MJPEG frame extraction
-├── lib/stream.sh        socat HTTP server (port 8080)
-├── lib/tracker.sh       client tracking (associative arrays)
-├── lib/stats.sh         system metrics (/proc, /sys)
-├── lib/dashboard.sh     BASHTOP-style TUI
-├── lib/guard.sh         Windows rejection
-├── lib/mdns.sh          avahi-publish
-├── lib/webrtc.sh        mediamtx gateway (optional)
-├── lib/common.sh        shared utilities
-└── web/player.html      web viewer (WebRTC + MJPEG)
+bifrost (Go binary)
+├── main.go              Entry point & orchestration
+├── embed_assets.go      go:embed for web assets
+├── internal/
+│   ├── config/          CLI flags, config parsing
+│   ├── capture/         Unified ffmpeg capture (video + audio + WebRTC RTP)
+│   ├── server/          HTTP server & endpoint handlers
+│   ├── webrtc/          Pion WebRTC peer management & RTP receiver
+│   ├── tracker/         Client tracking & bandwidth monitoring
+│   ├── stats/           System metrics from /proc and /sys
+│   ├── dashboard/       Terminal TUI (--headless fallback)
+│   └── mdns/            mDNS via avahi-publish
+└── web/
+    ├── player.html      Student viewer (WebRTC + MJPEG fallback)
+    └── admin.html       Teacher admin dashboard
 ```
 
 ---
 
 ## HTTP Endpoints
 
-| Endpoint    | Method | Description                                            |
-| ----------- | ------ | ------------------------------------------------------ |
-| `/`         | GET    | Web viewer HTML (WebRTC + MJPEG fallback)              |
-| `/stream`   | GET    | MJPEG video stream (`multipart/x-mixed-replace`)       |
-| `/frame`    | GET    | Single latest JPEG frame                               |
-| `/audio`    | GET    | MP3 audio stream                                       |
-| `/ping`     | GET    | Client telemetry (latency, OS, browser, GPU, etc.)     |
-| `/health`   | GET    | JSON health check                                      |
-| `/stats`    | GET    | JSON transmission stats                                |
-| `/webrtc/offer` | POST | WebRTC SDP signaling (requires mediamtx)          |
+| Endpoint        | Method | Description                                    |
+| --------------- | ------ | ---------------------------------------------- |
+| `/`             | GET    | Student viewer (WebRTC + MJPEG fallback)       |
+| `/admin`        | GET    | Teacher admin dashboard                        |
+| `/stream`       | GET    | MJPEG video stream (`multipart/x-mixed-replace`) |
+| `/frame`        | GET    | Single latest JPEG frame                       |
+| `/audio`        | GET    | MP3 audio stream                               |
+| `/ping`         | GET    | Client telemetry (latency, OS, browser, GPU)   |
+| `/health`       | GET    | JSON health check                              |
+| `/stats`        | GET    | JSON system stats                              |
+| `/api/clients`  | GET    | JSON client list (admin dashboard)             |
+| `/api/stats`    | GET    | JSON system stats (admin dashboard)            |
+| `/webrtc/offer` | POST   | WebRTC SDP signaling                           |
 
 ---
 
 ## TUI Dashboard
 
-The terminal dashboard (BASHTOP-style) displays:
+The terminal dashboard (BASHTOP-style, available with `--headless` or when no display server is running) displays:
 
 ```
 ╭── BIFROST v0.2.0 ── 192.168.1.100:8080 ── [12:34:56] ── uptime: 3d 12h ──╮
@@ -139,34 +134,25 @@ The terminal dashboard (BASHTOP-style) displays:
 
 | Package | Purpose | Install |
 |---------|---------|---------|
-| bash 4+ | Runtime | Pre-installed on all Linux |
 | ffmpeg | Screen/audio capture | `apt install ffmpeg` |
-| socat | HTTP server | `apt install socat` |
-| python3 | Frame splitter + Wayland capture | `apt install python3` |
-| avahi-daemon | mDNS | `apt install avahi-daemon avahi-utils` |
+| PulseAudio | System audio capture | Pre-installed on most desktop Linux |
 
 ### Optional
 
 | Package | Purpose | Install |
 |---------|---------|---------|
-| mediamtx | WebRTC gateway | See [mediamtx docs](https://github.com/bluenviron/mediamtx) |
+| avahi-daemon | mDNS discovery | `apt install avahi-daemon avahi-utils` |
+| python3 + GStreamer | Wayland capture | `apt install python3 gir1.2-gst-1.0` |
 
 ---
 
 ## Deployment
 
-### Debian Package
-
-```bash
-sudo bash scripts/install.sh
-sudo systemctl enable bifrost
-sudo systemctl start bifrost
-```
-
 ### Manual
 
 ```bash
-sudo bash bifrost.sh --headless &
+./bifrost              # With TUI dashboard
+./bifrost --headless   # Without TUI (for SSH/headless)
 ```
 
 ---
@@ -198,5 +184,5 @@ A: Wayland's security model prevents direct screen access. BIFROST uses GStreame
 **Q: Do I need to run as root?**  
 A: Only for privileged ports (below 1024). Port 8080 works without root, but screen capture often needs elevated permissions.
 
-**Q: What if mediamtx is not installed?**  
-A: BIFROST gracefully falls back to MJPEG-only streaming. WebRTC provides lower latency but is not required.
+**Q: How does WebRTC work without a TURN server?**  
+A: BIFROST uses Pion WebRTC for pure-Go WebRTC. On a LAN, host candidates are sufficient — no STUN/TURN server is needed.
