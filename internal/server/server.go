@@ -42,9 +42,8 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/watch", s.handleIndex)
 
 	// Streaming
-	mux.HandleFunc("/stream", s.handleMJPEGStream)
+	mux.HandleFunc("/stream", s.handleStream)
 	mux.HandleFunc("/frame", s.handleSingleFrame)
-	mux.HandleFunc("/audio", s.handleAudioStream)
 
 	// Telemetry
 	mux.HandleFunc("/ping", s.handlePing)

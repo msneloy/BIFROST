@@ -6,15 +6,20 @@ for perfect RTP timestamp synchronization.
 
 Outputs:
   - MJPEG to stdout (for HTTP viewer)
-  - VP8 RTP to UDP 127.0.0.1:5004 (for WebRTC video)
-  - Opus RTP to UDP 127.0.0.1:5005 (for WebRTC audio)
+  - VP8 RTP to UDP 127.0.0.1:5004 (for WebRTC video) [unless --no-webrtc]
+  - Opus RTP to UDP 127.0.0.1:5005 (for WebRTC audio) [unless --no-webrtc]
 """
 import gi
 gi.require_version('Gio', '2.0')
 from gi.repository import Gio, GLib
-import sys, subprocess, threading
+import sys, subprocess, threading, argparse
 
 log = lambda m: print(m, file=sys.stderr, flush=True)
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--no-webrtc', action='store_true', help='Disable WebRTC RTP outputs')
+args = parser.parse_args()
+no_webrtc = args.no_webrtc
 
 bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
 MUTTER = 'org.gnome.Mutter.ScreenCast'
@@ -82,13 +87,27 @@ pipeline_str = (
     f'! capsfilter caps=video/x-raw,format=BGRx,width=1920,height=1080 '
     f'! videorate max-rate=30 '
     f'! videoconvert '
-    f'! tee name=vt '
-    f'vt. ! queue max-size-buffers=1 leaky=downstream ! jpegenc quality=40 ! filesink location=/dev/stdout '
-    f'vt. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=2 deadline=1 cpu-used=8 ! rtpvp8pay ! '
-    f'udpsink host=127.0.0.1 port=5004 sync=false'
 )
 
-if audio_source:
+if no_webrtc:
+    # MJPEG only — no tee, no VP8, maximum CPU for jpegenc
+    pipeline_str += (
+        f'! jpegenc quality=40 ! filesink location=/dev/stdout'
+    )
+else:
+    # Tee to MJPEG + VP8 branches
+    pipeline_str += (
+        f'! tee name=vt '
+        f'vt. ! queue max-size-buffers=1 leaky=downstream ! jpegenc quality=40 ! filesink location=/dev/stdout '
+        f'vt. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=2 deadline=1 cpu-used=8 ! rtpvp8pay ! '
+        f'udpsink host=127.0.0.1 port=5004 sync=false'
+    )
+
+outputs = ['MJPEG stdout']
+if not no_webrtc:
+    outputs.append('VP8 RTP :5004')
+
+if audio_source and not no_webrtc:
     pipeline_str += (
         f' pulsesrc device={audio_source} '
         f'! audioconvert '
@@ -96,10 +115,11 @@ if audio_source:
         f'! rtpopuspay ! '
         f'udpsink host=127.0.0.1 port=5005 sync=false'
     )
-    log(f'Unified pipeline: MJPEG stdout + VP8 RTP :5004 + Opus RTP :5005')
+    outputs.append('Opus RTP :5005')
+
+log(f'Pipeline: {" + ".join(outputs)}')
+if audio_source:
     log(f'Audio source: {audio_source}')
-else:
-    log('Unified pipeline: MJPEG stdout + VP8 RTP :5004 (no audio)')
 
 proc = subprocess.Popen(
     ['gst-launch-1.0', '-v'] + pipeline_str.split(),

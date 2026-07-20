@@ -14,32 +14,25 @@ import (
 )
 
 type Capture struct {
-	config      *config.Config
-	videoCmd    *exec.Cmd
-	audioCmd    *exec.Cmd
-	waylandCmd  *exec.Cmd
-	splitter    *FrameSplitter
-	broadcaster *Broadcaster
-	audioBcast  *AudioBroadcaster
-	streaming   bool
-	mu          sync.Mutex
+	config     *config.Config
+	videoCmd   *exec.Cmd
+	audioCmd   *exec.Cmd
+	waylandCmd *exec.Cmd
+	splitter   *FrameSplitter
+	muxBuffer  *MuxBuffer
+	streaming  bool
+	mu         sync.Mutex
 }
 
 func New(cfg *config.Config) *Capture {
-	rb := NewRingBuffer(60)
 	return &Capture{
-		config:      cfg,
-		broadcaster: NewBroadcaster(rb),
-		audioBcast:  NewAudioBroadcaster(),
+		config:    cfg,
+		muxBuffer: NewMuxBuffer(30),
 	}
 }
 
-func (c *Capture) Broadcaster() *Broadcaster {
-	return c.broadcaster
-}
-
-func (c *Capture) AudioBroadcaster() *AudioBroadcaster {
-	return c.audioBcast
+func (c *Capture) MuxBuffer() *MuxBuffer {
+	return c.muxBuffer
 }
 
 func (c *Capture) IsStreaming() bool {
@@ -63,39 +56,30 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 		display = ":0"
 	}
 
-	// Build single ffmpeg command with multiple outputs:
-	//   stdout (fd 1) = MJPEG for HTTP /stream
-	//   UDP 5004      = VP8 RTP for WebRTC video
-	//   UDP 5005      = Opus RTP for WebRTC audio
-	//   fd 3          = MP3 for HTTP /audio
 	args := []string{
 		"-y", "-loglevel", "warning",
-		// Video input
 		"-f", "x11grab", "-draw_mouse", "1",
 		"-video_size", c.config.Resolution,
 		"-framerate", fmt.Sprintf("%d", c.config.FPS),
 		"-i", display,
 	}
 
-	// Audio input (if available and enabled)
 	audioSource := ""
 	if !c.config.NoAudio {
 		audioSource = detectPulseSource()
 	}
 	if audioSource != "" {
-		args = append(args,
-			"-f", "pulse", "-i", audioSource,
-		)
+		args = append(args, "-f", "pulse", "-i", audioSource)
 	}
 
-	// Output 1: MJPEG to stdout (for HTTP /stream clients)
+	// MJPEG to stdout (for HTTP /stream)
 	args = append(args,
 		"-map", "0:v",
 		"-f", "mjpeg", "-q:v", fmt.Sprintf("%d", c.config.Quality),
 		"pipe:1",
 	)
 
-	// Output 2: VP8 RTP to UDP 5004 (for WebRTC video)
+	// VP8 RTP for WebRTC video
 	if !c.config.NoWebRTC {
 		args = append(args,
 			"-map", "0:v",
@@ -105,7 +89,7 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 		)
 	}
 
-	// Output 3: Opus RTP to UDP 5005 (for WebRTC audio)
+	// Opus RTP for WebRTC audio
 	if audioSource != "" && !c.config.NoWebRTC {
 		args = append(args,
 			"-map", "1:a",
@@ -114,7 +98,7 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 		)
 	}
 
-	// Output 4: MP3 to fd 3 (for HTTP /audio clients)
+	// MP3 to fd 3 for HTTP audio
 	if audioSource != "" {
 		args = append(args,
 			"-map", "1:a",
@@ -125,13 +109,11 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 
 	c.videoCmd = exec.CommandContext(ctx, "ffmpeg", args...)
 
-	// Set up stdout pipe (MJPEG)
 	stdout, err := c.videoCmd.StdoutPipe()
 	if err != nil {
 		return fmt.Errorf("failed to create stdout pipe: %w", err)
 	}
 
-	// Set up fd 3 pipe (MP3 audio) via ExtraFiles
 	var audioReader *os.File
 	if audioSource != "" {
 		audioR, audioW, pipeErr := os.Pipe()
@@ -148,34 +130,25 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 		return fmt.Errorf("failed to start unified capture: %w", err)
 	}
 
-	// Close the write end of the audio pipe in the parent process
-	if audioReader != nil {
-		// The write end is duplicated into ffmpeg's fd 3 by ExtraFiles.
-		// We need to close our reference to the write end after Start().
-		// But ExtraFiles[0] IS the write end — Go duplicates it for the child.
-		// We can't close it directly here since it's in ExtraFiles.
-		// The child process has its own copy, so we just read from audioReader.
-	}
-
-	// Start frame splitter for MJPEG (reads stdout)
-	c.splitter = NewFrameSplitter(stdout, c.broadcaster)
+	// Frame splitter reads MJPEG from stdout, publishes to MuxBuffer
+	c.splitter = NewFrameSplitter(stdout, c.muxBuffer)
 	go func() {
 		if err := c.splitter.Run(ctx); err != nil && err != context.Canceled {
 			log.Printf("[!] Frame splitter error: %v", err)
 		}
 	}()
 
-	// Start audio reader for MP3 (reads fd 3)
+	// Audio reader reads MP3 from fd 3, publishes to MuxBuffer
 	if audioReader != nil {
 		go func() {
 			defer audioReader.Close()
-			buf := make([]byte, 32*1024)
+			buf := make([]byte, 8*1024) // 8KB chunks for lower latency
 			for {
 				n, err := audioReader.Read(buf)
 				if n > 0 {
 					chunk := make([]byte, n)
 					copy(chunk, buf[:n])
-					c.audioBcast.Publish(chunk)
+					c.muxBuffer.PublishAudio(chunk)
 				}
 				if err != nil {
 					break
@@ -206,6 +179,9 @@ func (c *Capture) startWayland(ctx context.Context) error {
 		}
 
 		cmd := exec.CommandContext(ctx, "python3", scriptPath)
+		if c.config.NoWebRTC {
+			cmd.Args = append(cmd.Args, "--no-webrtc")
+		}
 		stdout, err := cmd.StdoutPipe()
 		if err != nil {
 			continue
@@ -218,7 +194,7 @@ func (c *Capture) startWayland(ctx context.Context) error {
 		}
 
 		c.waylandCmd = cmd
-		c.splitter = NewFrameSplitter(stdout, c.broadcaster)
+		c.splitter = NewFrameSplitter(stdout, c.muxBuffer)
 		go func() {
 			if err := c.splitter.Run(ctx); err != nil && err != context.Canceled {
 				log.Printf("[!] Frame splitter error: %v", err)
@@ -227,8 +203,6 @@ func (c *Capture) startWayland(ctx context.Context) error {
 
 		log.Printf("[+] Wayland capture started via %s", script)
 
-		// Start separate audio capture for HTTP /audio clients
-		// (mutter_capture.py only outputs Opus RTP for WebRTC, not MP3 for HTTP)
 		if !c.config.NoAudio {
 			if source := detectPulseSource(); source != "" {
 				c.startAudioCapture(ctx, source)
@@ -271,13 +245,13 @@ func (c *Capture) startAudioCapture(ctx context.Context, source string) {
 	c.audioCmd = cmd
 
 	go func() {
-		buf := make([]byte, 32*1024)
+		buf := make([]byte, 8*1024) // 8KB chunks for lower latency
 		for {
 			n, err := stdout.Read(buf)
 			if n > 0 {
 				chunk := make([]byte, n)
 				copy(chunk, buf[:n])
-				c.audioBcast.Publish(chunk)
+				c.muxBuffer.PublishAudio(chunk)
 			}
 			if err != nil {
 				break

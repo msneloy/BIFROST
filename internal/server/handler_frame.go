@@ -9,7 +9,7 @@ func (s *Server) handleSingleFrame(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	frame := s.capture.Broadcaster().RingBuffer().Latest()
+	frame := s.capture.MuxBuffer().LatestVideo()
 	if frame == nil {
 		http.Error(w, "no frame available", http.StatusServiceUnavailable)
 		return

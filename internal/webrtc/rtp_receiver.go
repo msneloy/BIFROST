@@ -62,6 +62,7 @@ func (r *RTPReceiver) Start(ctx context.Context) error {
 
 func (r *RTPReceiver) readLoop(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalStaticRTP, name string) {
 	buf := make([]byte, 1500) // MTU-sized buffer
+	pktCount := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -81,8 +82,15 @@ func (r *RTPReceiver) readLoop(ctx context.Context, conn *net.UDPConn, track *we
 			continue
 		}
 
+		pktCount++
+		if pktCount <= 3 || pktCount%500 == 0 {
+			log.Printf("[WebRTC] RTP %s packet #%d: seq=%d ts=%d size=%d", name, pktCount, packet.SequenceNumber, packet.Timestamp, n)
+		}
+
 		if err := track.WriteRTP(packet); err != nil {
-			// Connection closed or track not ready — silently continue
+			if pktCount <= 10 || pktCount%100 == 0 {
+				log.Printf("[WebRTC] RTP %s WriteRTP error (#%d): %v", name, pktCount, err)
+			}
 			continue
 		}
 	}

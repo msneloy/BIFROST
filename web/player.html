@@ -130,7 +130,7 @@ video, canvas, img#mjpeg {
   <video id="video" autoplay playsinline style="display:none"></video>
   <canvas id="canvas" style="display:none"></canvas>
   <img id="mjpeg" style="display:none">
-  <audio id="audio" autoplay style="display:none"></audio>
+  <audio id="audio" style="display:none"></audio>
 
   <!-- HUD -->
   <div class="hud">
@@ -335,14 +335,29 @@ async function connectWebRTC() {
 
     pc.oniceconnectionstatechange = () => {
       const state = pc.iceConnectionState;
+      console.log('ICE state:', state);
       if (state === 'connected' || state === 'completed') {
         clearTimeout(connectTimeout);
         setStatus('live');
         retryCount = 0;
-      } else if (state === 'failed') {
+      } else if (state === 'failed' || state === 'closed' || state === 'disconnected') {
         clearTimeout(connectTimeout);
         setStatus('reconnecting');
         latencyEl.textContent = '';
+        retryCount++;
+        if (retryCount >= 2) {
+          console.log('WebRTC failed/closed, falling back to MJPEG');
+          connectMJPEG();
+        } else {
+          setTimeout(connectWebRTC, 2000);
+        }
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      console.log('Connection state:', pc.connectionState);
+      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
+        clearTimeout(connectTimeout);
         retryCount++;
         if (retryCount >= 2) connectMJPEG();
         else setTimeout(connectWebRTC, 2000);
@@ -403,9 +418,8 @@ function pollServerICE() {
   poll();
 }
 
-// ─── MJPEG ─────────────────────────────────────────────────────
+// ─── Mux stream (video+audio in one connection) ────────────────
 let mjpegAbort = null;
-const SOI = 0xFF, SOI2 = 0xD8, EOI2 = 0xD9;
 
 function connectMJPEG() {
   destroyPC();
@@ -416,36 +430,38 @@ function connectMJPEG() {
   canvas.style.display = 'block';
   video.style.display = 'none';
   setStatus('live');
-  label.textContent = 'LIVE (MJPEG)';
+  label.textContent = 'LIVE';
   frameTimestamps = [];
   mjpegLatencies = [];
+  audioBuf = [];
+  rxLen = 0;
 
-  audioEl.srcObject = null;
-  audioEl.src = '/audio';
-  audioEl.load();
-  audioEl.play().catch(() => {});
-
-  let buf = new Uint8Array(0);
   fetch('/stream', { signal: mjpegAbort.signal }).then(response => {
     const reader = response.body.getReader();
     function processChunk({ done, value }) {
       if (done) return;
-      const merged = new Uint8Array(buf.length + value.length);
-      merged.set(buf); merged.set(value, buf.length); buf = merged;
-      while (buf.length > 2) {
-        let soi = -1;
-        for (let i = 0; i < buf.length - 1; i++) { if (buf[i] === SOI && buf[i+1] === SOI2) { soi = i; break; } }
-        if (soi === -1) { buf = new Uint8Array(0); break; }
-        let eoi = -1;
-        for (let i = soi + 2; i < buf.length - 1; i++) { if (buf[i] === SOI && buf[i+1] === EOI2) { eoi = i + 2; break; } }
-        if (eoi === -1) break;
-        renderJPEG(buf.slice(soi, eoi));
-        buf = buf.slice(eoi);
+      // Grow buffer if needed (double capacity)
+      if (rxLen + value.length > rxBuf.length) {
+        const grown = new Uint8Array(Math.max(rxBuf.length * 2, rxLen + value.length));
+        grown.set(rxBuf.subarray(0, rxLen));
+        rxBuf = grown;
       }
-      if (buf.length > 500000) {
-        let lastSoi = -1;
-        for (let i = buf.length - 3; i >= 0; i--) { if (buf[i] === SOI && buf[i+1] === SOI2) { lastSoi = i; break; } }
-        buf = lastSoi > 0 ? buf.slice(lastSoi) : new Uint8Array(0);
+      rxBuf.set(value, rxLen);
+      rxLen += value.length;
+      // Parse entries: [type(1)][length(4)][data(N)]
+      let pos = 0;
+      while (pos + 5 <= rxLen) {
+        const type = rxBuf[pos];
+        const length = (rxBuf[pos+1] << 24 | rxBuf[pos+2] << 16 | rxBuf[pos+3] << 8 | rxBuf[pos+4]) >>> 0;
+        if (pos + 5 + length > rxLen) break;
+        if (type === 0x01) renderJPEG(rxBuf, pos + 5, length);
+        else if (type === 0x02) queueAudio(rxBuf, pos + 5, length);
+        pos += 5 + length;
+      }
+      // Compact: shift unparsed data to front (no allocation)
+      if (pos > 0) {
+        rxBuf.copyWithin(0, pos, rxLen);
+        rxLen -= pos;
       }
       return reader.read().then(processChunk);
     }
@@ -455,33 +471,56 @@ function connectMJPEG() {
   });
 }
 
-const _renderImg = new Image();
-let _pendingFrame = null, _renderBusy = false;
+// ─── Receiving buffer (grows as needed, no per-read alloc) ─────
+let rxBuf = new Uint8Array(64 * 1024);
+let rxLen = 0;
 
-function renderJPEG(data) {
-  _pendingFrame = data;
-  if (!_renderBusy) _scheduleRender();
+// ─── Audio playback — accumulate chunks, feed single element ────
+let audioBuf = [];
+let audioBlobUrl = null;
+
+function queueAudio(data, offset, length) {
+  audioBuf.push(data.slice(offset, offset + length));
+}
+
+setInterval(() => {
+  if (audioBuf.length === 0) return;
+  const blob = new Blob(audioBuf, { type: 'audio/mpeg' });
+  audioBuf = [];
+  if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
+  audioBlobUrl = URL.createObjectURL(blob);
+  audioEl.src = audioBlobUrl;
+  audioEl.volume = audioEl.volume || 1;
+  audioEl.play().catch(() => {});
+}, 100);
+
+// ─── Video rendering — createImageBitmap ───────────────────────
+let _pendingBitmap = null, _renderBusy = false;
+
+function renderJPEG(data, offset, length) {
+  // Must slice because data is a view into rxBuf which gets compacted
+  const jpegData = data.slice(offset, offset + length);
+  const blob = new Blob([jpegData], { type: 'image/jpeg' });
+  createImageBitmap(blob).then(bitmap => {
+    _pendingBitmap = bitmap;
+    if (!_renderBusy) _scheduleRender();
+  }).catch(() => blob.close());
 }
 
 function _scheduleRender() {
   _renderBusy = true;
   requestAnimationFrame(() => {
-    const data = _pendingFrame;
-    _pendingFrame = null;
-    if (!data) { _renderBusy = false; return; }
-    const blob = new Blob([data], { type: 'image/jpeg' });
-    const url = URL.createObjectURL(blob);
-    _renderImg.onload = () => {
-      if (canvas.width !== _renderImg.width || canvas.height !== _renderImg.height) {
-        canvas.width = _renderImg.width; canvas.height = _renderImg.height;
-      }
-      canvasCtx.drawImage(_renderImg, 0, 0);
-      URL.revokeObjectURL(url);
-      frameTimestamps.push(Date.now());
-      _renderBusy = false;
-      if (_pendingFrame) _scheduleRender();
-    };
-    _renderImg.src = url;
+    const bmp = _pendingBitmap;
+    _pendingBitmap = null;
+    if (!bmp) { _renderBusy = false; return; }
+    if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
+      canvas.width = bmp.width; canvas.height = bmp.height;
+    }
+    canvasCtx.drawImage(bmp, 0, 0);
+    bmp.close();
+    frameTimestamps.push(Date.now());
+    _renderBusy = false;
+    if (_pendingBitmap) _scheduleRender();
   });
 }
 

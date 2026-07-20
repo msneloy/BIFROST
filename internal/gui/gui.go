@@ -42,6 +42,7 @@ type GUI struct {
 
 	// Clients
 	clientList *widget.List
+	clientCard *widget.Card
 	clients    []*tracker.Client
 	clientsMu  sync.RWMutex
 
@@ -156,10 +157,10 @@ func (g *GUI) buildUI() {
 		},
 	)
 
-	clientCard := widget.NewCard("Connected Clients", "0 active", g.clientList)
+	g.clientCard = widget.NewCard("Connected Clients", "0 active", g.clientList)
 
 	// ─── Layout ─────────────────────────────────────────────
-	rightPanel := container.NewVBox(statsCard, clientCard)
+	rightPanel := container.NewVBox(statsCard, g.clientCard)
 
 	content := container.NewHSplit(previewCard, rightPanel)
 	content.SetOffset(0.6)
@@ -222,7 +223,7 @@ func (g *GUI) refreshPreview() {
 			continue
 		}
 
-		frame := g.cap.Broadcaster().RingBuffer().Latest()
+		frame := g.cap.MuxBuffer().LatestVideo()
 		if frame == nil {
 			continue
 		}
@@ -326,6 +327,7 @@ func (g *GUI) refreshClients() {
 		}
 
 		fyne.Do(func() {
+			g.clientCard.SetSubTitle(fmt.Sprintf("%d active", active))
 			g.clientList.Refresh()
 		})
 	}
