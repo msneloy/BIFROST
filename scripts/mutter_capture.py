@@ -80,34 +80,20 @@ def drain_stderr(proc, label):
 # --- Detect audio source ---
 audio_source = detect_monitor_source()
 
-# --- Single unified pipeline: video + audio share one GStreamer clock ---
-# This ensures RTP timestamps are synchronized for perfect A/V sync in WebRTC.
+# --- Pipeline: VP8 video + Opus audio via RTP (WebRTC) ---
+# No MJPEG — all CPU goes to VP8 encoding for maximum throughput.
 pipeline_str = (
     f'pipewiresrc path={nid_val} '
     f'! capsfilter caps=video/x-raw,format=BGRx,width=1920,height=1080 '
     f'! videorate max-rate=30 '
     f'! videoconvert '
+    f'! vp8enc threads=4 deadline=1 cpu-used=8 '
+    f'! rtpvp8pay ! udpsink host=127.0.0.1 port=5004 sync=false'
 )
 
-if no_webrtc:
-    # MJPEG only — no tee, no VP8, maximum CPU for jpegenc
-    pipeline_str += (
-        f'! jpegenc quality=40 ! filesink location=/dev/stdout'
-    )
-else:
-    # Tee to MJPEG + VP8 branches
-    pipeline_str += (
-        f'! tee name=vt '
-        f'vt. ! queue max-size-buffers=1 leaky=downstream ! jpegenc quality=40 ! filesink location=/dev/stdout '
-        f'vt. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=2 deadline=1 cpu-used=8 ! rtpvp8pay ! '
-        f'udpsink host=127.0.0.1 port=5004 sync=false'
-    )
+outputs = ['VP8 RTP :5004']
 
-outputs = ['MJPEG stdout']
-if not no_webrtc:
-    outputs.append('VP8 RTP :5004')
-
-if audio_source and not no_webrtc:
+if audio_source:
     pipeline_str += (
         f' pulsesrc device={audio_source} '
         f'! audioconvert '

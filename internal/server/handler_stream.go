@@ -31,6 +31,10 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 
 	log.Printf("[+] Stream client connected: %s", ip)
 
+	// Batch buffer — accumulates multiple entries before a single write+flush
+	var batch []byte
+	var hasVideo bool
+
 	for {
 		select {
 		case <-r.Context().Done():
@@ -40,14 +44,40 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 			if !ok {
 				return
 			}
-			if _, err := w.Write(data); err != nil {
+			batch = append(batch, data...)
+			if data[0] == capture.EntryTypeVideo {
+				hasVideo = true
+			}
+
+			// Drain any more pending entries without blocking
+		drain:
+			for {
+				select {
+				case extra, ok := <-sub.C:
+					if !ok {
+						break drain
+					}
+					batch = append(batch, extra...)
+					if extra[0] == capture.EntryTypeVideo {
+						hasVideo = true
+					}
+				default:
+					break drain
+				}
+			}
+
+			// Single write for the whole batch
+			if _, err := w.Write(batch); err != nil {
 				return
 			}
-			// Flush only on video frames — audio piggybacks on the next flush.
-			if data[0] == capture.EntryTypeVideo {
+			s.tracker.AddBytes(ip, uint64(len(batch)))
+
+			// Flush only when we have at least one video frame
+			if hasVideo {
 				flusher.Flush()
 			}
-			s.tracker.AddBytes(ip, uint64(len(data)))
+			batch = batch[:0]
+			hasVideo = false
 		}
 	}
 }

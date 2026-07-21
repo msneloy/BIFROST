@@ -23,9 +23,6 @@ type MuxBuffer struct {
 
 	subMu sync.RWMutex
 	subs  map[*MuxSubscriber]struct{}
-
-	// Pre-allocated marshal buffer to reduce allocations
-	marshalBuf []byte
 }
 
 type MuxSubscriber struct {
@@ -35,10 +32,9 @@ type MuxSubscriber struct {
 
 func NewMuxBuffer(capacity int) *MuxBuffer {
 	return &MuxBuffer{
-		entries:    make([]MuxEntry, capacity),
-		capacity:   capacity,
-		subs:       make(map[*MuxSubscriber]struct{}),
-		marshalBuf: make([]byte, 0, 256*1024),
+		entries:  make([]MuxEntry, capacity),
+		capacity: capacity,
+		subs:     make(map[*MuxSubscriber]struct{}),
 	}
 }
 
@@ -58,19 +54,12 @@ func (mb *MuxBuffer) push(entry MuxEntry) {
 		return
 	}
 
-	data := entry.marshalInto(mb.marshalBuf)
-	mb.marshalBuf = data
+	// Marshal once into a temp buffer, then copy to each subscriber
+	data := entry.Marshal()
 
-	first := true
 	for s := range mb.subs {
-		var chunk []byte
-		if first {
-			chunk = data
-			first = false
-		} else {
-			chunk = make([]byte, len(data))
-			copy(chunk, data)
-		}
+		chunk := make([]byte, len(data))
+		copy(chunk, data)
 		select {
 		case s.C <- chunk:
 		default:
@@ -88,7 +77,7 @@ func (mb *MuxBuffer) PublishAudio(chunk []byte) {
 
 func (mb *MuxBuffer) Subscribe() *MuxSubscriber {
 	s := &MuxSubscriber{
-		C:    make(chan []byte, 64),
+		C:    make(chan []byte, 128),
 		done: make(chan struct{}),
 	}
 
@@ -102,7 +91,7 @@ func (mb *MuxBuffer) Subscribe() *MuxSubscriber {
 		for i := mb.count - 1; i >= 0; i-- {
 			idx := (mb.head - 1 - (mb.count - 1 - i) + mb.capacity) % mb.capacity
 			if mb.entries[idx].Type == EntryTypeVideo {
-				data := mb.entries[idx].marshalInto(nil)
+				data := mb.entries[idx].Marshal()
 				select {
 				case s.C <- data:
 				default:
@@ -138,15 +127,10 @@ func (mb *MuxBuffer) LatestVideo() []byte {
 	return nil
 }
 
-// marshalInto writes [type(1)][length(4)][data(N)] into buf (grows if needed).
-func (e MuxEntry) marshalInto(buf []byte) []byte {
+// Marshal writes [type(1)][length(4)][data(N)] into a new byte slice.
+func (e MuxEntry) Marshal() []byte {
 	dataLen := len(e.Data)
-	needed := 5 + dataLen
-	if cap(buf) < needed {
-		buf = make([]byte, needed)
-	} else {
-		buf = buf[:needed]
-	}
+	buf := make([]byte, 5+dataLen)
 	buf[0] = e.Type
 	buf[1] = byte(dataLen >> 24)
 	buf[2] = byte(dataLen >> 16)

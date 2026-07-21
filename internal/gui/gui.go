@@ -1,16 +1,14 @@
 package gui
 
 import (
+	"context"
 	"fmt"
-	"image"
-	"image/color"
-	"image/jpeg"
+	"os"
 	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
-	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
@@ -31,14 +29,12 @@ type GUI struct {
 	cap *capture.Capture
 	trk *tracker.Tracker
 
-	// Preview - use canvas.Raster for efficient frame updates
-	preview *canvas.Raster
-	lastImg image.Image
-	imgMu   sync.RWMutex
-
 	// Stats
 	lblCPU, lblRAM, lblDisk, lblGPU, lblNIC, lblSwap, lblFan, lblBat, lblUptime *widget.Label
 	barCPU, barRAM, barDisk                                                       *widget.ProgressBar
+
+	// Hardware models
+	lblCPUModel, lblDiskModel, lblBoardModel *widget.Label
 
 	// Clients
 	clientList *widget.List
@@ -46,24 +42,25 @@ type GUI struct {
 	clients    []*tracker.Client
 	clientsMu  sync.RWMutex
 
-	// Status
+	// Status & controls
 	lblStatus *widget.Label
 	lblURL    *widget.Label
+	btnToggle *widget.Button
+	btnRestart *widget.Button
 }
 
 func Run(cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker) {
 	g := &GUI{cfg: cfg, cap: cap, trk: trk}
 
-	theApp = app.New()
+	theApp = app.NewWithID("com.nelobster.bifrost")
 	theApp.Settings().SetTheme(&bifrostTheme{})
 
 	theWindow = theApp.NewWindow("BIFROST")
-	theWindow.Resize(fyne.NewSize(1100, 700))
+	theWindow.Resize(fyne.NewSize(1920, 1080))
 	theWindow.SetMaster()
 
 	g.buildUI()
 
-	go g.refreshPreview()
 	go g.refreshStats()
 	go g.refreshClients()
 
@@ -83,24 +80,61 @@ func (g *GUI) buildUI() {
 	g.lblStatus.TextStyle = fyne.TextStyle{Bold: true}
 	g.lblStatus.Importance = widget.HighImportance
 
-	g.lblURL = widget.NewLabel(fmt.Sprintf("http://%s:%d", g.cfg.LocalIP, g.cfg.Port))
+	g.lblURL = widget.NewLabel(fmt.Sprintf("http://%s:%d  |  http://%s.local:%d", g.cfg.LocalIP, g.cfg.Port, g.cfg.LocalIP, g.cfg.Port))
 	g.lblURL.TextStyle = fyne.TextStyle{Monospace: true}
 
-	statusBar := container.NewHBox(
-		g.lblStatus,
-		layout.NewSpacer(),
-		widget.NewLabel("STREAM:"),
-		g.lblURL,
+	// ─── Broadcast toggle (button that changes state) ───────
+	g.btnToggle = widget.NewButton("OFFLINE", func() {
+		if g.cap.IsStreaming() {
+			g.cap.Stop()
+		} else {
+			go g.cap.Start(context.Background())
+			g.lblStatus.SetText("STARTING...")
+			g.lblStatus.Importance = widget.WarningImportance
+		}
+	})
+	g.btnToggle.Importance = widget.DangerImportance
+
+	g.btnRestart = widget.NewButton("RESTART", func() {
+		g.cap.Stop()
+		time.Sleep(500 * time.Millisecond)
+		os.Exit(0)
+	})
+	g.btnRestart.Importance = widget.DangerImportance
+
+	controls := container.NewHBox(g.btnToggle, layout.NewSpacer(), g.btnRestart)
+
+	statusBar := container.NewVBox(
+		container.NewHBox(
+			g.lblStatus,
+			layout.NewSpacer(),
+			widget.NewLabel("STREAM:"),
+			g.lblURL,
+		),
+		controls,
 	)
 
-	// ─── Preview using canvas.Raster ────────────────────────
-	// canvas.Raster takes a function: func(w, h int) image.Image
-	g.preview = canvas.NewRaster(g.drawFrame)
-	g.preview.SetMinSize(fyne.NewSize(640, 360))
+	// ─── Stream specs ──────────────────────────────────────
+	audioStatus := "Off"
+	if !g.cfg.NoAudio {
+		audioStatus = "On"
+	}
+	webrtcStatus := "Off"
+	if !g.cfg.NoWebRTC {
+		webrtcStatus = "On"
+	}
+	specsContent := container.NewVBox(
+		widget.NewLabel("Stream Configuration"),
+		newStaticRow("Resolution:", g.cfg.Resolution),
+		newStaticRow("FPS:", fmt.Sprintf("%d", g.cfg.FPS)),
+		newStaticRow("Quality:", fmt.Sprintf("%d", g.cfg.Quality)),
+		newStaticRow("Port:", fmt.Sprintf("%d", g.cfg.Port)),
+		newStaticRow("Audio:", audioStatus),
+		newStaticRow("WebRTC:", webrtcStatus),
+	)
+	specsCard := widget.NewCard("Specs", "", specsContent)
 
-	previewCard := widget.NewCard("Live Preview", "", g.preview)
-
-	// ─── System stats ───────────────────────────────────────
+	// ─── System monitor (with hardware models merged in) ────
 	g.lblCPU = widget.NewLabel("--")
 	g.lblRAM = widget.NewLabel("--")
 	g.lblDisk = widget.NewLabel("--")
@@ -115,14 +149,19 @@ func (g *GUI) buildUI() {
 	g.barRAM = widget.NewProgressBar()
 	g.barDisk = widget.NewProgressBar()
 
+	g.lblCPUModel = widget.NewLabel("--")
+	g.lblDiskModel = widget.NewLabel("--")
+	g.lblBoardModel = widget.NewLabel("--")
+
 	statsContent := container.NewVBox(
-		widget.NewLabel("System Information"),
-		newStatRow("CPU:", g.lblCPU, g.barCPU),
-		newStatRow("RAM:", g.lblRAM, g.barRAM),
-		newStatRow("Disk:", g.lblDisk, g.barDisk),
+		widget.NewLabel("System Monitor"),
+		newStatRowWithSub("CPU:", g.lblCPU, g.barCPU, g.lblCPUModel),
+		newStatRowWithSub("RAM:", g.lblRAM, g.barRAM, nil),
+		newStatRowWithSub("Disk:", g.lblDisk, g.barDisk, g.lblDiskModel),
 		widget.NewSeparator(),
 		newStatRowLabel("GPU:", g.lblGPU),
 		newStatRowLabel("NIC:", g.lblNIC),
+		newStatRowLabel("Board:", g.lblBoardModel),
 		newStatRowLabel("Swap:", g.lblSwap),
 		newStatRowLabel("Fan:", g.lblFan),
 		newStatRowLabel("Battery:", g.lblBat),
@@ -130,7 +169,10 @@ func (g *GUI) buildUI() {
 		newStatRowLabel("Uptime:", g.lblUptime),
 	)
 
-	statsCard := widget.NewCard("System", "", statsContent)
+	statsCard := widget.NewCard("Monitor", "", statsContent)
+
+	topRow := container.NewHSplit(specsCard, statsCard)
+	topRow.SetOffset(0.3)
 
 	// ─── Client list ────────────────────────────────────────
 	g.clientList = widget.NewList(
@@ -160,93 +202,11 @@ func (g *GUI) buildUI() {
 	g.clientCard = widget.NewCard("Connected Clients", "0 active", g.clientList)
 
 	// ─── Layout ─────────────────────────────────────────────
-	rightPanel := container.NewVBox(statsCard, g.clientCard)
+	content := container.NewVSplit(topRow, g.clientCard)
+	content.SetOffset(0.55)
 
-	content := container.NewHSplit(previewCard, rightPanel)
-	content.SetOffset(0.6)
-
-	theWindow.SetContent(container.NewBorder(statusBar, nil, nil, nil, content))
-}
-
-// drawFrame is called by canvas.Raster to render the current frame.
-// It runs on the Fyne render thread — safe to read lastImg.
-func (g *GUI) drawFrame(w, h int) image.Image {
-	g.imgMu.RLock()
-	img := g.lastImg
-	g.imgMu.RUnlock()
-
-	if img == nil {
-		// Return a blank dark image
-		blank := image.NewRGBA(image.Rect(0, 0, w, h))
-		for y := 0; y < h; y++ {
-			for x := 0; x < w; x++ {
-				blank.Set(x, y, color.RGBA{R: 20, G: 20, B: 20, A: 255})
-			}
-		}
-		return blank
-	}
-
-	// Scale the captured frame to the requested size
-	bounds := img.Bounds()
-	srcW := bounds.Dx()
-	srcH := bounds.Dy()
-	if srcW == 0 || srcH == 0 {
-		return img
-	}
-
-	dst := image.NewRGBA(image.Rect(0, 0, w, h))
-	sx := float64(srcW) / float64(w)
-	sy := float64(srcH) / float64(h)
-
-	for dy := 0; dy < h; dy++ {
-		sy0 := int(float64(dy)*sy) + bounds.Min.Y
-		if sy0 >= bounds.Max.Y {
-			sy0 = bounds.Max.Y - 1
-		}
-		for dx := 0; dx < w; dx++ {
-			sx0 := int(float64(dx)*sx) + bounds.Min.X
-			if sx0 >= bounds.Max.X {
-				sx0 = bounds.Max.X - 1
-			}
-			dst.Set(dx, dy, img.At(sx0, sy0))
-		}
-	}
-	return dst
-}
-
-func (g *GUI) refreshPreview() {
-	ticker := time.NewTicker(100 * time.Millisecond) // ~10 FPS UI refresh
-	defer ticker.Stop()
-
-	for range ticker.C {
-		if !g.cap.IsStreaming() {
-			continue
-		}
-
-		frame := g.cap.MuxBuffer().LatestVideo()
-		if frame == nil {
-			continue
-		}
-
-		img, err := decodeJPEG(frame)
-		if err != nil {
-			continue
-		}
-
-		g.imgMu.Lock()
-		g.lastImg = img
-		g.imgMu.Unlock()
-
-		// Trigger Fyne to re-call drawFrame on the UI thread
-		fyne.Do(func() {
-			if theApp != nil && g.preview != nil {
-				c := theApp.Driver().CanvasForObject(g.preview)
-				if c != nil {
-					c.Refresh(g.preview)
-				}
-			}
-		})
-	}
+	fullLayout := container.NewVBox(statusBar, content)
+	theWindow.SetContent(fullLayout)
 }
 
 func (g *GUI) refreshStats() {
@@ -265,6 +225,10 @@ func (g *GUI) refreshStats() {
 
 			g.lblDisk.SetText(fmt.Sprintf("%d%%  %s/%s", sys.DiskPct, sys.DiskUsed, sys.DiskTotal))
 			g.barDisk.SetValue(float64(sys.DiskPct) / 100.0)
+
+			g.lblCPUModel.SetText(fmt.Sprintf("%s (%d cores)", sys.CPUModel, sys.CPUCores))
+			g.lblDiskModel.SetText(sys.DiskModel)
+			g.lblBoardModel.SetText(fmt.Sprintf("%s %s", sys.BoardVendor, sys.BoardModel))
 
 			if sys.GPUFreqMHz > 0 || sys.GPUTempC > 0 {
 				g.lblGPU.SetText(fmt.Sprintf("%dMHz  %d°C", sys.GPUFreqMHz, sys.GPUTempC))
@@ -298,12 +262,17 @@ func (g *GUI) refreshStats() {
 
 			g.lblUptime.SetText(sys.Uptime)
 
+			// Sync toggle button with streaming state
 			if g.cap.IsStreaming() {
 				g.lblStatus.SetText("LIVE")
 				g.lblStatus.Importance = widget.HighImportance
+				g.btnToggle.SetText("LIVE")
+				g.btnToggle.Importance = widget.HighImportance
 			} else {
 				g.lblStatus.SetText("OFFLINE")
 				g.lblStatus.Importance = widget.DangerImportance
+				g.btnToggle.SetText("OFFLINE")
+				g.btnToggle.Importance = widget.DangerImportance
 			}
 		})
 	}
@@ -333,29 +302,24 @@ func (g *GUI) refreshClients() {
 	}
 }
 
-func decodeJPEG(data []byte) (image.Image, error) {
-	return jpeg.Decode(&byteReader{data: data})
-}
-
-type byteReader struct {
-	data []byte
-	pos  int
-}
-
-func (r *byteReader) Read(p []byte) (int, error) {
-	if r.pos >= len(r.data) {
-		return 0, fmt.Errorf("EOF")
-	}
-	n := copy(p, r.data[r.pos:])
-	r.pos += n
-	return n, nil
-}
-
 func newStatRow(label string, val *widget.Label, bar *widget.ProgressBar) *fyne.Container {
 	return container.NewBorder(nil, nil,
 		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
 		nil,
 		container.NewVBox(val, bar),
+	)
+}
+
+func newStatRowWithSub(label string, val *widget.Label, bar *widget.ProgressBar, sub *widget.Label) *fyne.Container {
+	items := []fyne.CanvasObject{val, bar}
+	if sub != nil {
+		sub.TextStyle = fyne.TextStyle{Italic: true}
+		items = append(items, sub)
+	}
+	return container.NewBorder(nil, nil,
+		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		nil,
+		container.NewVBox(items...),
 	)
 }
 
@@ -367,6 +331,10 @@ func newStatRowLabel(label string, val *widget.Label) *fyne.Container {
 	)
 }
 
-func init() {
-	_ = color.RGBA{}
+func newStaticRow(label, value string) *fyne.Container {
+	return container.NewBorder(nil, nil,
+		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
+		nil,
+		widget.NewLabel(value),
+	)
 }

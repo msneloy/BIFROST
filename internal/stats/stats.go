@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -29,6 +30,7 @@ type SystemStats struct {
 	DiskTotal   string
 	DiskUsed    string
 	DiskPct     int
+	DiskModel   string
 	NICName     string
 	NICSpeed    int
 	NICType     string
@@ -37,6 +39,8 @@ type SystemStats struct {
 	FanRPM      int
 	Uptime      string
 	UptimeSecs  int64
+	BoardVendor string
+	BoardModel  string
 }
 
 var prevIdle, prevTotal uint64
@@ -53,10 +57,12 @@ func Collect() *SystemStats {
 	s.SwapTotalGB, s.SwapUsedGB, s.SwapPct = getSwapInfo()
 	s.GPUFreqMHz, s.GPUTempC = getGPUInfo()
 	s.DiskTotal, s.DiskUsed, s.DiskPct = getDiskInfo()
+	s.DiskModel = getDiskModel()
 	s.NICName, s.NICSpeed, s.NICType = getNICInfo()
 	s.BatPct, s.BatStatus = getBatteryInfo()
 	s.FanRPM = getFanRPM()
 	s.Uptime, s.UptimeSecs = getUptime()
+	s.BoardVendor, s.BoardModel = getBoardInfo()
 	return s
 }
 
@@ -261,6 +267,38 @@ func getDiskInfo() (total, used string, pct int) {
 	pct = int(float64(usedBytes) / float64(totalBytes) * 100)
 	total = formatBytes(totalBytes)
 	used = formatBytes(usedBytes)
+	return
+}
+
+func getDiskModel() string {
+	// Try reading from sysfs for the root disk
+	matches, _ := filepath.Glob("/sys/block/*/device/model")
+	for _, m := range matches {
+		data := readFile(m)
+		if data != "" {
+			return data
+		}
+	}
+	// Fallback: try lsblk
+	out, err := exec.Command("lsblk", "-dno", "MODEL", "/dev/sda").Output()
+	if err == nil {
+		model := strings.TrimSpace(string(out))
+		if model != "" {
+			return model
+		}
+	}
+	return "Unknown"
+}
+
+func getBoardInfo() (vendor, model string) {
+	vendor = readFile("/sys/class/dmi/id/board_vendor")
+	model = readFile("/sys/class/dmi/id/board_name")
+	if vendor == "" {
+		vendor = "Unknown"
+	}
+	if model == "" {
+		model = "Unknown"
+	}
 	return
 }
 

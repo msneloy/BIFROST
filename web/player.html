@@ -435,6 +435,8 @@ function connectMJPEG() {
   mjpegLatencies = [];
   audioBuf = [];
   rxLen = 0;
+  audioNextTime = 0;
+  initAudio();
 
   fetch('/stream', { signal: mjpegAbort.signal }).then(response => {
     const reader = response.body.getReader();
@@ -475,53 +477,85 @@ function connectMJPEG() {
 let rxBuf = new Uint8Array(64 * 1024);
 let rxLen = 0;
 
-// ─── Audio playback — accumulate chunks, feed single element ────
+// ─── Audio playback — Web Audio API for gapless sync ───────────
 let audioBuf = [];
-let audioBlobUrl = null;
+let audioCtx = null;
+let audioNextTime = 0;
 
 function queueAudio(data, offset, length) {
   audioBuf.push(data.slice(offset, offset + length));
+}
+
+function initAudio() {
+  if (!audioCtx) {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  }
+  // Resume requires user gesture on mobile — try, handle silently
+  if (audioCtx.state === 'suspended') {
+    audioCtx.resume().catch(() => {});
+  }
+}
+
+// Ensure AudioContext is resumed on any user interaction (mobile autoplay policy)
+document.addEventListener('click', () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); }, { once: false });
+document.addEventListener('touchstart', () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); }, { once: false });
+
+function playMuxAudio(mp3Data) {
+  if (!audioCtx) return;
+  const blob = new Blob([mp3Data], { type: 'audio/mpeg' });
+  blob.arrayBuffer().then(buf => {
+    return audioCtx.decodeAudioData(buf);
+  }).then(audioBuffer => {
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+    // Schedule to play immediately after the previous chunk ends
+    const now = audioCtx.currentTime;
+    if (audioNextTime < now) audioNextTime = now;
+    source.start(audioNextTime);
+    audioNextTime += audioBuffer.duration;
+  }).catch(() => {});
 }
 
 setInterval(() => {
   if (audioBuf.length === 0) return;
   const blob = new Blob(audioBuf, { type: 'audio/mpeg' });
   audioBuf = [];
-  if (audioBlobUrl) URL.revokeObjectURL(audioBlobUrl);
-  audioBlobUrl = URL.createObjectURL(blob);
-  audioEl.src = audioBlobUrl;
-  audioEl.volume = audioEl.volume || 1;
-  audioEl.play().catch(() => {});
+  blob.arrayBuffer().then(buf => {
+    return audioCtx.decodeAudioData(buf);
+  }).then(audioBuffer => {
+    const source = audioCtx.createBufferSource();
+    source.buffer = audioBuffer;
+    source.connect(audioCtx.destination);
+    const now = audioCtx.currentTime;
+    if (audioNextTime < now) audioNextTime = now;
+    source.start(audioNextTime);
+    audioNextTime += audioBuffer.duration;
+  }).catch(() => {});
 }, 100);
 
-// ─── Video rendering — createImageBitmap ───────────────────────
-let _pendingBitmap = null, _renderBusy = false;
+// ─── Video rendering — robust mobile-compatible ───────────────
+let _renderGen = 0;
 
 function renderJPEG(data, offset, length) {
-  // Must slice because data is a view into rxBuf which gets compacted
   const jpegData = data.slice(offset, offset + length);
   const blob = new Blob([jpegData], { type: 'image/jpeg' });
-  createImageBitmap(blob).then(bitmap => {
-    _pendingBitmap = bitmap;
-    if (!_renderBusy) _scheduleRender();
-  }).catch(() => blob.close());
-}
-
-function _scheduleRender() {
-  _renderBusy = true;
-  requestAnimationFrame(() => {
-    const bmp = _pendingBitmap;
-    _pendingBitmap = null;
-    if (!bmp) { _renderBusy = false; return; }
-    if (canvas.width !== bmp.width || canvas.height !== bmp.height) {
-      canvas.width = bmp.width; canvas.height = bmp.height;
+  const url = URL.createObjectURL(blob);
+  const gen = ++_renderGen;
+  const img = new Image();
+  img.onload = () => {
+    // Only render if this is still the latest frame
+    if (gen !== _renderGen) { URL.revokeObjectURL(url); return; }
+    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
+      canvas.width = img.naturalWidth;
+      canvas.height = img.naturalHeight;
     }
-    canvasCtx.drawImage(bmp, 0, 0);
-    bmp.close();
+    canvasCtx.drawImage(img, 0, 0);
+    URL.revokeObjectURL(url);
     frameTimestamps.push(Date.now());
-    _renderBusy = false;
-    if (_pendingBitmap) _scheduleRender();
-  });
+  };
+  img.onerror = () => { URL.revokeObjectURL(url); };
+  img.src = url;
 }
 
 // ─── Controls ──────────────────────────────────────────────────
