@@ -127,7 +127,7 @@ video, canvas, img#mjpeg {
 </head>
 <body>
 <div id="video-container">
-  <video id="video" autoplay playsinline style="display:none"></video>
+  <video id="video" autoplay playsinline muted style="display:none"></video>
   <canvas id="canvas" style="display:none"></canvas>
   <img id="mjpeg" style="display:none">
   <audio id="audio" style="display:none"></audio>
@@ -287,6 +287,18 @@ function toggleMute() {
   $('vol-icon').style.opacity = muted ? '0.4' : '1';
 }
 
+// Unmute video on first user interaction (browser autoplay policy)
+let _audioUnmuted = false;
+function unmuteOnInteraction() {
+  if (_audioUnmuted) return;
+  _audioUnmuted = true;
+  video.muted = false;
+  audioEl.muted = false;
+  $('vol-icon').style.opacity = '1';
+}
+document.addEventListener('click', unmuteOnInteraction, { once: true });
+document.addEventListener('keydown', unmuteOnInteraction, { once: true });
+
 // ─── WebRTC ────────────────────────────────────────────────────
 let icePollAbort = null;
 
@@ -408,7 +420,7 @@ function pollServerICE() {
         if (data.candidates) {
           for (const c of data.candidates) {
             if (pc && c.candidate) {
-              pc.addIceCandidate(new RTCIceCandidate({ candidate: c.candidate, sdpMLineIndex: c.sdpMLineIndex, sdpMid: '0' })).catch(() => {});
+              pc.addIceCandidate(new RTCIceCandidate({ candidate: c.candidate, sdpMLineIndex: c.sdpMLineIndex, sdpMid: c.sdpMid })).catch(() => {});
             }
           }
         }

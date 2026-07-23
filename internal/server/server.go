@@ -21,9 +21,10 @@ type Server struct {
 	playerHTML []byte
 	adminHTML  []byte
 	webrtcMgr  *bifrostwebrtc.Manager
+	ctx        context.Context
 }
 
-func New(cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker, playerHTML []byte, adminHTML []byte, webrtcMgr *bifrostwebrtc.Manager) *Server {
+func New(ctx context.Context, cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker, playerHTML []byte, adminHTML []byte, webrtcMgr *bifrostwebrtc.Manager) *Server {
 	return &Server{
 		config:     cfg,
 		capture:    cap,
@@ -31,6 +32,7 @@ func New(cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker, playerH
 		playerHTML: playerHTML,
 		adminHTML:  adminHTML,
 		webrtcMgr:  webrtcMgr,
+		ctx:        ctx,
 	}
 }
 
@@ -62,6 +64,7 @@ func (s *Server) Start(ctx context.Context) error {
 	mux.HandleFunc("/admin", s.handleAdmin)
 	mux.HandleFunc("/api/clients", s.handleAPIClients)
 	mux.HandleFunc("/api/stats", s.handleAPIStats)
+	mux.HandleFunc("/api/broadcast", s.handleBroadcastToggle)
 
 	s.httpSrv = &http.Server{
 		Addr:         fmt.Sprintf(":%d", s.config.Port),

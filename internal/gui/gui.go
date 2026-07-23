@@ -31,7 +31,6 @@ type GUI struct {
 
 	// Stats
 	lblCPU, lblRAM, lblDisk, lblGPU, lblNIC, lblSwap, lblFan, lblBat, lblUptime *widget.Label
-	barCPU, barRAM, barDisk                                                       *widget.ProgressBar
 
 	// Hardware models
 	lblCPUModel, lblDiskModel, lblBoardModel *widget.Label
@@ -43,9 +42,9 @@ type GUI struct {
 	clientsMu  sync.RWMutex
 
 	// Status & controls
-	lblStatus *widget.Label
-	lblURL    *widget.Label
-	btnToggle *widget.Button
+	lblStatus  *widget.Label
+	lblURL     *widget.Label
+	btnToggle  *widget.Button
 	btnRestart *widget.Button
 }
 
@@ -114,27 +113,7 @@ func (g *GUI) buildUI() {
 		controls,
 	)
 
-	// ─── Stream specs ──────────────────────────────────────
-	audioStatus := "Off"
-	if !g.cfg.NoAudio {
-		audioStatus = "On"
-	}
-	webrtcStatus := "Off"
-	if !g.cfg.NoWebRTC {
-		webrtcStatus = "On"
-	}
-	specsContent := container.NewVBox(
-		widget.NewLabel("Stream Configuration"),
-		newStaticRow("Resolution:", g.cfg.Resolution),
-		newStaticRow("FPS:", fmt.Sprintf("%d", g.cfg.FPS)),
-		newStaticRow("Quality:", fmt.Sprintf("%d", g.cfg.Quality)),
-		newStaticRow("Port:", fmt.Sprintf("%d", g.cfg.Port)),
-		newStaticRow("Audio:", audioStatus),
-		newStaticRow("WebRTC:", webrtcStatus),
-	)
-	specsCard := widget.NewCard("Specs", "", specsContent)
-
-	// ─── System monitor (with hardware models merged in) ────
+	// ─── System monitor (compact, with specs inline) ───────
 	g.lblCPU = widget.NewLabel("--")
 	g.lblRAM = widget.NewLabel("--")
 	g.lblDisk = widget.NewLabel("--")
@@ -145,34 +124,58 @@ func (g *GUI) buildUI() {
 	g.lblBat = widget.NewLabel("--")
 	g.lblUptime = widget.NewLabel("--")
 
-	g.barCPU = widget.NewProgressBar()
-	g.barRAM = widget.NewProgressBar()
-	g.barDisk = widget.NewProgressBar()
-
 	g.lblCPUModel = widget.NewLabel("--")
 	g.lblDiskModel = widget.NewLabel("--")
 	g.lblBoardModel = widget.NewLabel("--")
 
-	statsContent := container.NewVBox(
-		widget.NewLabel("System Monitor"),
-		newStatRowWithSub("CPU:", g.lblCPU, g.barCPU, g.lblCPUModel),
-		newStatRowWithSub("RAM:", g.lblRAM, g.barRAM, nil),
-		newStatRowWithSub("Disk:", g.lblDisk, g.barDisk, g.lblDiskModel),
-		widget.NewSeparator(),
-		newStatRowLabel("GPU:", g.lblGPU),
-		newStatRowLabel("NIC:", g.lblNIC),
-		newStatRowLabel("Board:", g.lblBoardModel),
-		newStatRowLabel("Swap:", g.lblSwap),
-		newStatRowLabel("Fan:", g.lblFan),
-		newStatRowLabel("Battery:", g.lblBat),
-		widget.NewSeparator(),
-		newStatRowLabel("Uptime:", g.lblUptime),
+	audioStatus := "Off"
+	if !g.cfg.NoAudio {
+		audioStatus = "On"
+	}
+	webrtcStatus := "Off"
+	if !g.cfg.NoWebRTC {
+		webrtcStatus = "On"
+	}
+
+	specsGrid := container.NewGridWithColumns(2,
+		newCompactRow("Resolution:", g.cfg.Resolution),
+		newCompactRow("FPS:", fmt.Sprintf("%d", g.cfg.FPS)),
+		newCompactRow("Quality:", fmt.Sprintf("%d", g.cfg.Quality)),
+		newCompactRow("Port:", fmt.Sprintf("%d", g.cfg.Port)),
+		newCompactRow("Audio:", audioStatus),
+		newCompactRow("WebRTC:", webrtcStatus),
 	)
 
-	statsCard := widget.NewCard("Monitor", "", statsContent)
+	statsGrid := container.NewGridWithColumns(3,
+		newCompactLabelRow("CPU:", g.lblCPU),
+		newCompactLabelRow("RAM:", g.lblRAM),
+		newCompactLabelRow("Disk:", g.lblDisk),
+		newCompactLabelRow("GPU:", g.lblGPU),
+		newCompactLabelRow("Swap:", g.lblSwap),
+		newCompactLabelRow("Fan:", g.lblFan),
+		newCompactLabelRow("NIC:", g.lblNIC),
+		newCompactLabelRow("Board:", g.lblBoardModel),
+		newCompactLabelRow("Bat:", g.lblBat),
+	)
 
-	topRow := container.NewHSplit(specsCard, statsCard)
-	topRow.SetOffset(0.3)
+	modelsGrid := container.NewGridWithColumns(3,
+		newCompactItalicRow("CPU:", g.lblCPUModel),
+		newCompactItalicRow("Disk:", g.lblDiskModel),
+		newCompactItalicRow("Board:", g.lblBoardModel),
+	)
+
+	uptimeRow := newCompactLabelRow("Uptime:", g.lblUptime)
+
+	monitorContent := container.NewVBox(
+		container.NewPadded(specsGrid),
+		widget.NewSeparator(),
+		container.NewPadded(statsGrid),
+		widget.NewSeparator(),
+		container.NewPadded(modelsGrid),
+		widget.NewSeparator(),
+		container.NewPadded(uptimeRow),
+	)
+	monitorCard := widget.NewCard("Monitor", "", monitorContent)
 
 	// ─── Client list ────────────────────────────────────────
 	g.clientList = widget.NewList(
@@ -201,9 +204,9 @@ func (g *GUI) buildUI() {
 
 	g.clientCard = widget.NewCard("Connected Clients", "0 active", g.clientList)
 
-	// ─── Layout ─────────────────────────────────────────────
-	content := container.NewVSplit(topRow, g.clientCard)
-	content.SetOffset(0.55)
+	// ─── Layout: clients left, monitor right ────────────────
+	content := container.NewHSplit(g.clientCard, monitorCard)
+	content.SetOffset(0.3)
 
 	fullLayout := container.NewVBox(statusBar, content)
 	theWindow.SetContent(fullLayout)
@@ -218,13 +221,8 @@ func (g *GUI) refreshStats() {
 
 		fyne.Do(func() {
 			g.lblCPU.SetText(fmt.Sprintf("%d%%  %dMHz  %d°C", sys.CPUUsage, sys.CPUFreqMHz, sys.CPUTempC))
-			g.barCPU.SetValue(float64(sys.CPUUsage) / 100.0)
-
 			g.lblRAM.SetText(fmt.Sprintf("%d%%  %.1f/%.1fG", sys.MemPct, sys.MemUsedGB, sys.MemTotalGB))
-			g.barRAM.SetValue(float64(sys.MemPct) / 100.0)
-
 			g.lblDisk.SetText(fmt.Sprintf("%d%%  %s/%s", sys.DiskPct, sys.DiskUsed, sys.DiskTotal))
-			g.barDisk.SetValue(float64(sys.DiskPct) / 100.0)
 
 			g.lblCPUModel.SetText(fmt.Sprintf("%s (%d cores)", sys.CPUModel, sys.CPUCores))
 			g.lblDiskModel.SetText(sys.DiskModel)
@@ -302,39 +300,24 @@ func (g *GUI) refreshClients() {
 	}
 }
 
-func newStatRow(label string, val *widget.Label, bar *widget.ProgressBar) *fyne.Container {
-	return container.NewBorder(nil, nil,
+func newCompactRow(label string, val string) *fyne.Container {
+	return container.NewHBox(
 		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil,
-		container.NewVBox(val, bar),
+		widget.NewLabel(val),
 	)
 }
 
-func newStatRowWithSub(label string, val *widget.Label, bar *widget.ProgressBar, sub *widget.Label) *fyne.Container {
-	items := []fyne.CanvasObject{val, bar}
-	if sub != nil {
-		sub.TextStyle = fyne.TextStyle{Italic: true}
-		items = append(items, sub)
-	}
-	return container.NewBorder(nil, nil,
+func newCompactLabelRow(label string, val *widget.Label) *fyne.Container {
+	return container.NewHBox(
 		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil,
-		container.NewVBox(items...),
-	)
-}
-
-func newStatRowLabel(label string, val *widget.Label) *fyne.Container {
-	return container.NewBorder(nil, nil,
-		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil,
 		val,
 	)
 }
 
-func newStaticRow(label, value string) *fyne.Container {
-	return container.NewBorder(nil, nil,
+func newCompactItalicRow(label string, val *widget.Label) *fyne.Container {
+	val.TextStyle = fyne.TextStyle{Italic: true}
+	return container.NewHBox(
 		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil,
-		widget.NewLabel(value),
+		val,
 	)
 }

@@ -102,6 +102,46 @@ func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(result)
 }
 
+func (s *Server) handleBroadcastToggle(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		http.Error(w, "Invalid request body", http.StatusBadRequest)
+		return
+	}
+
+	if req.Enabled {
+		// Start capture if not already streaming
+		if !s.capture.IsStreaming() {
+			if err := s.capture.Start(s.ctx); err != nil {
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]interface{}{
+					"error":   "Failed to start capture",
+					"details": err.Error(),
+				})
+				return
+			}
+		}
+	} else {
+		// Stop capture if streaming
+		if s.capture.IsStreaming() {
+			s.capture.Stop()
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"streaming": s.capture.IsStreaming(),
+	})
+}
+
 func formatBytesRate(b uint64) string {
 	// Simplified: just show total for now
 	return "--"

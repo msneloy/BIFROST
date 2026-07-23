@@ -80,18 +80,20 @@ def drain_stderr(proc, label):
 # --- Detect audio source ---
 audio_source = detect_monitor_source()
 
-# --- Pipeline: VP8 video + Opus audio via RTP (WebRTC) ---
-# No MJPEG — all CPU goes to VP8 encoding for maximum throughput.
+# --- Pipeline: VP8 video + Opus audio via RTP (WebRTC) + MJPEG to stdout ---
 pipeline_str = (
     f'pipewiresrc path={nid_val} '
     f'! capsfilter caps=video/x-raw,format=BGRx,width=1920,height=1080 '
     f'! videorate max-rate=30 '
     f'! videoconvert '
-    f'! vp8enc threads=4 deadline=1 cpu-used=8 '
-    f'! rtpvp8pay ! udpsink host=127.0.0.1 port=5004 sync=false'
+    f'! tee name=t '
+    f't. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=4 deadline=1 cpu-used=8 '
+    f'! rtpvp8pay ! udpsink host=127.0.0.1 port=5004 sync=false '
+    f't. ! queue max-size-buffers=1 leaky=downstream ! jpegenc quality={40} '
+    f'! multifilesink location=/dev/stdout append=true sync=false'
 )
 
-outputs = ['VP8 RTP :5004']
+outputs = ['VP8 RTP :5004', 'MJPEG stdout']
 
 if audio_source:
     pipeline_str += (
