@@ -3,12 +3,14 @@ package gui
 import (
 	"context"
 	"fmt"
+	"image/color"
 	"os"
 	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/widget"
@@ -29,21 +31,25 @@ type GUI struct {
 	cap *capture.Capture
 	trk *tracker.Tracker
 
-	// Stats
-	lblCPU, lblRAM, lblDisk, lblGPU, lblNIC, lblSwap, lblFan, lblBat, lblUptime *widget.Label
+	// Header
+	statusDot   *canvas.Circle
+	statusLabel *canvas.Text
+	uptimeLabel *canvas.Text
+	urlLabel    *canvas.Text
 
-	// Hardware models
-	lblCPUModel, lblDiskModel, lblBoardModel *widget.Label
+	// Stats
+	cpuValue, ramValue, diskValue, gpuValue *canvas.Text
+	swapValue, fanValue, nicValue, batValue *canvas.Text
+	cpuSub, ramSub, diskSub, gpuSub         *canvas.Text
+	swapSub, nicSub                         *canvas.Text
 
 	// Clients
 	clientList *widget.List
-	clientCard *widget.Card
 	clients    []*tracker.Client
 	clientsMu  sync.RWMutex
+	clientCount *canvas.Text
 
-	// Status & controls
-	lblStatus  *widget.Label
-	lblURL     *widget.Label
+	// Controls
 	btnToggle  *widget.Button
 	btnRestart *widget.Button
 }
@@ -55,7 +61,7 @@ func Run(cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker) {
 	theApp.Settings().SetTheme(&bifrostTheme{})
 
 	theWindow = theApp.NewWindow("BIFROST")
-	theWindow.Resize(fyne.NewSize(1920, 1080))
+	theWindow.Resize(fyne.NewSize(1400, 900))
 	theWindow.SetMaster()
 
 	g.buildUI()
@@ -74,22 +80,59 @@ func Quit() {
 }
 
 func (g *GUI) buildUI() {
-	// ─── Status bar ─────────────────────────────────────────
-	g.lblStatus = widget.NewLabel("INITIALIZING")
-	g.lblStatus.TextStyle = fyne.TextStyle{Bold: true}
-	g.lblStatus.Importance = widget.HighImportance
+	header := g.buildHeader()
+	statsSection := g.buildStatsSection()
+	clientsSection := g.buildClientsSection()
 
-	g.lblURL = widget.NewLabel(fmt.Sprintf("http://%s:%d  |  http://%s.local:%d", g.cfg.LocalIP, g.cfg.Port, g.cfg.LocalIP, g.cfg.Port))
-	g.lblURL.TextStyle = fyne.TextStyle{Monospace: true}
+	mainSplit := container.NewHSplit(statsSection, clientsSection)
+	mainSplit.SetOffset(0.55)
 
-	// ─── Broadcast toggle (button that changes state) ───────
+	fullLayout := container.NewVBox(header, mainSplit)
+	theWindow.SetContent(fullLayout)
+}
+
+func (g *GUI) buildHeader() *fyne.Container {
+	// Logo
+	logoText := canvas.NewText("BIFROST", ColorAccent)
+	logoText.TextSize = 22
+	logoText.TextStyle = fyne.TextStyle{Bold: true}
+
+	versionText := canvas.NewText("  v0.3.0", ColorText3)
+	versionText.TextSize = 11
+
+	subtitleText := canvas.NewText("Browser Integrated Feed for Remote Observation & Screen Transmission", ColorText3)
+	subtitleText.TextSize = 10
+
+	logoRow := container.NewHBox(logoText, versionText)
+	headerLeft := container.NewVBox(logoRow, subtitleText)
+
+	// Status indicator
+	g.statusDot = canvas.NewCircle(ColorText3)
+	g.statusDot.Resize(fyne.NewSize(10, 10))
+
+	g.statusLabel = canvas.NewText("CONNECTING", ColorText3)
+	g.statusLabel.TextSize = 11
+	g.statusLabel.TextStyle = fyne.TextStyle{Bold: true}
+
+	statusRow := container.NewHBox(g.statusDot, layout.NewSpacer(), g.statusLabel)
+
+	// Status badge container
+	statusBadge := container.NewPadded(statusRow)
+
+	// Uptime
+	g.uptimeLabel = canvas.NewText("--", ColorText2)
+	g.uptimeLabel.TextSize = 11
+
+	// URL
+	g.urlLabel = canvas.NewText(fmt.Sprintf("http://%s:%d", g.cfg.LocalIP, g.cfg.Port), ColorAccent)
+	g.urlLabel.TextSize = 11
+
+	// Controls
 	g.btnToggle = widget.NewButton("OFFLINE", func() {
 		if g.cap.IsStreaming() {
 			g.cap.Stop()
 		} else {
 			go g.cap.Start(context.Background())
-			g.lblStatus.SetText("STARTING...")
-			g.lblStatus.Importance = widget.WarningImportance
 		}
 	})
 	g.btnToggle.Importance = widget.DangerImportance
@@ -99,34 +142,51 @@ func (g *GUI) buildUI() {
 		time.Sleep(500 * time.Millisecond)
 		os.Exit(0)
 	})
-	g.btnRestart.Importance = widget.DangerImportance
+	g.btnRestart.Importance = widget.LowImportance
 
-	controls := container.NewHBox(g.btnToggle, layout.NewSpacer(), g.btnRestart)
+	controls := container.NewHBox(g.btnToggle, g.btnRestart)
 
-	statusBar := container.NewVBox(
-		container.NewHBox(
-			g.lblStatus,
-			layout.NewSpacer(),
-			widget.NewLabel("STREAM:"),
-			g.lblURL,
-		),
-		controls,
+	// Header right side
+	headerRight := container.NewVBox(statusBadge, g.urlLabel, g.uptimeLabel, controls)
+
+	// Full header
+	headerContent := container.NewHBox(headerLeft, layout.NewSpacer(), headerRight)
+
+	// Header background
+	headerBg := canvas.NewRectangle(ColorHeader)
+	headerBg.SetMinSize(fyne.NewSize(0, 80))
+
+	return container.NewStack(headerBg, container.NewPadded(headerContent))
+}
+
+func (g *GUI) buildStatsSection() fyne.CanvasObject {
+	// Section title
+	titleText := canvas.NewText("System Monitor", ColorText)
+	titleText.TextSize = 14
+	titleText.TextStyle = fyne.TextStyle{Bold: true}
+
+	// Create stat cards
+	cpuCard := g.createStatCard("CPU", &g.cpuValue, &g.cpuSub)
+	ramCard := g.createStatCard("RAM", &g.ramValue, &g.ramSub)
+	diskCard := g.createStatCard("DISK", &g.diskValue, &g.diskSub)
+	gpuCard := g.createStatCard("GPU", &g.gpuValue, &g.gpuSub)
+	swapCard := g.createStatCard("SWAP", &g.swapValue, &g.swapSub)
+	nicCard := g.createStatCard("NIC", &g.nicValue, &g.nicSub)
+	fanCard := g.createStatCard("FAN", &g.fanValue, nil)
+	batCard := g.createStatCard("BATTERY", &g.batValue, nil)
+
+	// Stats grid
+	statsGrid := container.NewGridWithColumns(2,
+		cpuCard, ramCard,
+		diskCard, gpuCard,
+		swapCard, nicCard,
+		fanCard, batCard,
 	)
 
-	// ─── System monitor (compact, with specs inline) ───────
-	g.lblCPU = widget.NewLabel("--")
-	g.lblRAM = widget.NewLabel("--")
-	g.lblDisk = widget.NewLabel("--")
-	g.lblGPU = widget.NewLabel("--")
-	g.lblNIC = widget.NewLabel("--")
-	g.lblSwap = widget.NewLabel("--")
-	g.lblFan = widget.NewLabel("--")
-	g.lblBat = widget.NewLabel("--")
-	g.lblUptime = widget.NewLabel("--")
-
-	g.lblCPUModel = widget.NewLabel("--")
-	g.lblDiskModel = widget.NewLabel("--")
-	g.lblBoardModel = widget.NewLabel("--")
+	// System info section
+	infoTitle := canvas.NewText("Stream Config", ColorText2)
+	infoTitle.TextSize = 11
+	infoTitle.TextStyle = fyne.TextStyle{Bold: true}
 
 	audioStatus := "Off"
 	if !g.cfg.NoAudio {
@@ -137,47 +197,76 @@ func (g *GUI) buildUI() {
 		webrtcStatus = "On"
 	}
 
-	specsGrid := container.NewGridWithColumns(2,
-		newCompactRow("Resolution:", g.cfg.Resolution),
-		newCompactRow("FPS:", fmt.Sprintf("%d", g.cfg.FPS)),
-		newCompactRow("Quality:", fmt.Sprintf("%d", g.cfg.Quality)),
-		newCompactRow("Port:", fmt.Sprintf("%d", g.cfg.Port)),
-		newCompactRow("Audio:", audioStatus),
-		newCompactRow("WebRTC:", webrtcStatus),
+	infoGrid := container.NewGridWithColumns(2,
+		g.createInfoRow("Resolution", g.cfg.Resolution),
+		g.createInfoRow("FPS", fmt.Sprintf("%d", g.cfg.FPS)),
+		g.createInfoRow("Quality", fmt.Sprintf("%d", g.cfg.Quality)),
+		g.createInfoRow("Port", fmt.Sprintf("%d", g.cfg.Port)),
+		g.createInfoRow("Audio", audioStatus),
+		g.createInfoRow("WebRTC", webrtcStatus),
 	)
 
-	statsGrid := container.NewGridWithColumns(3,
-		newCompactLabelRow("CPU:", g.lblCPU),
-		newCompactLabelRow("RAM:", g.lblRAM),
-		newCompactLabelRow("Disk:", g.lblDisk),
-		newCompactLabelRow("GPU:", g.lblGPU),
-		newCompactLabelRow("Swap:", g.lblSwap),
-		newCompactLabelRow("Fan:", g.lblFan),
-		newCompactLabelRow("NIC:", g.lblNIC),
-		newCompactLabelRow("Board:", g.lblBoardModel),
-		newCompactLabelRow("Bat:", g.lblBat),
+	// Hardware info
+	hwTitle := canvas.NewText("Hardware", ColorText2)
+	hwTitle.TextSize = 11
+	hwTitle.TextStyle = fyne.TextStyle{Bold: true}
+
+	g.cpuValue = g.cpuValue // ensure initialized
+	cpuModel := canvas.NewText("--", ColorText3)
+	cpuModel.TextSize = 10
+	g.cpuSub = cpuModel
+
+	diskModel := canvas.NewText("--", ColorText3)
+	diskModel.TextSize = 10
+	g.diskSub = diskModel
+
+	boardModel := canvas.NewText("--", ColorText3)
+	boardModel.TextSize = 10
+
+	hwGrid := container.NewGridWithColumns(1,
+		g.createInfoRowCustom("CPU", cpuModel),
+		g.createInfoRowCustom("Disk", diskModel),
+		g.createInfoRowCustom("Board", boardModel),
 	)
 
-	modelsGrid := container.NewGridWithColumns(3,
-		newCompactItalicRow("CPU:", g.lblCPUModel),
-		newCompactItalicRow("Disk:", g.lblDiskModel),
-		newCompactItalicRow("Board:", g.lblBoardModel),
-	)
-
-	uptimeRow := newCompactLabelRow("Uptime:", g.lblUptime)
-
-	monitorContent := container.NewVBox(
-		container.NewPadded(specsGrid),
+	content := container.NewVBox(
+		titleText,
+		layout.NewSpacer(),
+		statsGrid,
 		widget.NewSeparator(),
-		container.NewPadded(statsGrid),
+		infoTitle,
+		infoGrid,
 		widget.NewSeparator(),
-		container.NewPadded(modelsGrid),
+		hwTitle,
+		hwGrid,
 		widget.NewSeparator(),
-		container.NewPadded(uptimeRow),
 	)
-	monitorCard := widget.NewCard("Monitor", "", monitorContent)
 
-	// ─── Client list ────────────────────────────────────────
+	// Card background
+	cardBg := canvas.NewRectangle(ColorSurface)
+	headerBg := canvas.NewRectangle(ColorCardHeader)
+	headerBg.SetMinSize(fyne.NewSize(0, 40))
+
+	headerOverlay := container.NewStack(headerBg, container.NewPadded(titleText))
+	statsContent := container.NewVBox(
+		container.NewStack(cardBg, container.NewPadded(content)),
+	)
+
+	return container.NewVBox(headerOverlay, statsContent)
+}
+
+func (g *GUI) buildClientsSection() fyne.CanvasObject {
+	// Section title
+	titleText := canvas.NewText("Connected Clients", ColorText)
+	titleText.TextSize = 14
+	titleText.TextStyle = fyne.TextStyle{Bold: true}
+
+	g.clientCount = canvas.NewText("0 active", ColorText3)
+	g.clientCount.TextSize = 11
+
+	titleRow := container.NewHBox(titleText, layout.NewSpacer(), g.clientCount)
+
+	// Client list
 	g.clientList = widget.NewList(
 		func() int {
 			g.clientsMu.RLock()
@@ -185,31 +274,134 @@ func (g *GUI) buildUI() {
 			return len(g.clients)
 		},
 		func() fyne.CanvasObject {
-			return widget.NewLabel("template")
+			return g.createClientRow()
 		},
 		func(id widget.ListItemID, obj fyne.CanvasObject) {
 			g.clientsMu.RLock()
 			defer g.clientsMu.RUnlock()
 			if id < len(g.clients) {
-				c := g.clients[id]
-				status := "○"
-				if c.Active {
-					status = "●"
-				}
-				obj.(*widget.Label).SetText(fmt.Sprintf("%s  %-15s  %s/%s  %s",
-					status, c.IP, c.OS, c.Browser, c.Device))
+				g.updateClientRow(obj.(*fyne.Container), g.clients[id])
 			}
 		},
 	)
 
-	g.clientCard = widget.NewCard("Connected Clients", "0 active", g.clientList)
+	// Card background
+	cardBg := canvas.NewRectangle(ColorSurface)
+	headerBg := canvas.NewRectangle(ColorCardHeader)
+	headerBg.SetMinSize(fyne.NewSize(0, 40))
 
-	// ─── Layout: clients left, monitor right ────────────────
-	content := container.NewHSplit(g.clientCard, monitorCard)
-	content.SetOffset(0.3)
+	headerOverlay := container.NewStack(headerBg, container.NewPadded(titleRow))
+	listContent := container.NewStack(cardBg, container.NewPadded(g.clientList))
 
-	fullLayout := container.NewVBox(statusBar, content)
-	theWindow.SetContent(fullLayout)
+	return container.NewVBox(headerOverlay, listContent)
+}
+
+func (g *GUI) createStatCard(label string, value **canvas.Text, sub **canvas.Text) *fyne.Container {
+	// Label
+	titleText := canvas.NewText(label, ColorText3)
+	titleText.TextSize = 10
+
+	// Value
+	valText := canvas.NewText("--", ColorText)
+	valText.TextSize = 18
+	valText.TextStyle = fyne.TextStyle{Bold: true}
+	*value = valText
+
+	// Sub text
+	subText := canvas.NewText("", ColorText3)
+	subText.TextSize = 10
+	if sub != nil {
+		*sub = subText
+	}
+
+	content := container.NewVBox(
+		titleText,
+		valText,
+		subText,
+	)
+
+	// Card background
+	cardBg := canvas.NewRectangle(ColorSurface2)
+
+	return container.NewStack(cardBg, container.NewPadded(content))
+}
+
+func (g *GUI) createInfoRow(label, value string) *fyne.Container {
+	titleText := canvas.NewText(label, ColorText3)
+	titleText.TextSize = 10
+
+	valText := canvas.NewText(value, ColorText2)
+	valText.TextSize = 11
+
+	return container.NewHBox(titleText, layout.NewSpacer(), valText)
+}
+
+func (g *GUI) createInfoRowCustom(label string, valCanvas *canvas.Text) *fyne.Container {
+	titleText := canvas.NewText(label, ColorText3)
+	titleText.TextSize = 10
+
+	return container.NewHBox(titleText, layout.NewSpacer(), valCanvas)
+}
+
+func (g *GUI) createClientRow() *fyne.Container {
+	// Status dot
+	dot := canvas.NewCircle(ColorText3)
+	dot.Resize(fyne.NewSize(8, 8))
+
+	// Device icon
+	deviceIcon := canvas.NewText(" Desktop", ColorText2)
+	deviceIcon.TextSize = 12
+
+	// IP
+	ipText := canvas.NewText("--", ColorText)
+	ipText.TextSize = 12
+	ipText.TextStyle = fyne.TextStyle{Monospace: true}
+
+	// OS/Browser
+	infoText := canvas.NewText("-- / --", ColorText2)
+	infoText.TextSize = 11
+
+	return container.NewHBox(
+		container.NewPadded(dot),
+		deviceIcon,
+		ipText,
+		layout.NewSpacer(),
+		infoText,
+	)
+}
+
+func (g *GUI) updateClientRow(row *fyne.Container, c *tracker.Client) {
+	if len(row.Objects) < 5 {
+		return
+	}
+
+	// Status dot
+	dot := row.Objects[0].(*fyne.Container).Objects[0].(*canvas.Circle)
+	if c.Active {
+		dot.FillColor = ColorGreen
+	} else {
+		dot.FillColor = ColorText3
+	}
+	dot.Refresh()
+
+	// Device icon
+	deviceIcon := row.Objects[1].(*canvas.Text)
+	if c.Device == "mobile" {
+		deviceIcon.Text = " Mobile"
+	} else {
+		deviceIcon.Text = " Desktop"
+	}
+	deviceIcon.Refresh()
+
+	// IP
+	ipText := row.Objects[2].(*canvas.Text)
+	ipText.Text = c.IP
+	ipText.Refresh()
+
+	// Info
+	infoText := row.Objects[4].(*canvas.Text)
+	infoText.Text = fmt.Sprintf("%s / %s", c.OS, c.Browser)
+	infoText.Refresh()
 }
 
 func (g *GUI) refreshStats() {
@@ -220,58 +412,114 @@ func (g *GUI) refreshStats() {
 		sys := stats.Collect()
 
 		fyne.Do(func() {
-			g.lblCPU.SetText(fmt.Sprintf("%d%%  %dMHz  %d°C", sys.CPUUsage, sys.CPUFreqMHz, sys.CPUTempC))
-			g.lblRAM.SetText(fmt.Sprintf("%d%%  %.1f/%.1fG", sys.MemPct, sys.MemUsedGB, sys.MemTotalGB))
-			g.lblDisk.SetText(fmt.Sprintf("%d%%  %s/%s", sys.DiskPct, sys.DiskUsed, sys.DiskTotal))
+			// CPU
+			g.cpuValue.Text = fmt.Sprintf("%d%%", sys.CPUUsage)
+			g.cpuValue.Color = barColor(sys.CPUUsage)
+			g.cpuValue.Refresh()
+			if g.cpuSub != nil {
+				g.cpuSub.Text = fmt.Sprintf("%d MHz  %d°C", sys.CPUFreqMHz, sys.CPUTempC)
+				g.cpuSub.Refresh()
+			}
 
-			g.lblCPUModel.SetText(fmt.Sprintf("%s (%d cores)", sys.CPUModel, sys.CPUCores))
-			g.lblDiskModel.SetText(sys.DiskModel)
-			g.lblBoardModel.SetText(fmt.Sprintf("%s %s", sys.BoardVendor, sys.BoardModel))
+			// RAM
+			g.ramValue.Text = fmt.Sprintf("%d%%", sys.MemPct)
+			g.ramValue.Color = barColor(sys.MemPct)
+			g.ramValue.Refresh()
+			if g.ramSub != nil {
+				g.ramSub.Text = fmt.Sprintf("%.1f / %.1f GB", sys.MemUsedGB, sys.MemTotalGB)
+				g.ramSub.Refresh()
+			}
 
+			// Disk
+			g.diskValue.Text = fmt.Sprintf("%d%%", sys.DiskPct)
+			g.diskValue.Color = barColor(sys.DiskPct)
+			g.diskValue.Refresh()
+			if g.diskSub != nil {
+				g.diskSub.Text = fmt.Sprintf("%s / %s", sys.DiskUsed, sys.DiskTotal)
+				g.diskSub.Refresh()
+			}
+
+			// GPU
 			if sys.GPUFreqMHz > 0 || sys.GPUTempC > 0 {
-				g.lblGPU.SetText(fmt.Sprintf("%dMHz  %d°C", sys.GPUFreqMHz, sys.GPUTempC))
+				g.gpuValue.Text = fmt.Sprintf("%d MHz", sys.GPUFreqMHz)
+				g.gpuValue.Color = ColorText
+				if g.gpuSub != nil {
+					g.gpuSub.Text = fmt.Sprintf("%d°C", sys.GPUTempC)
+					g.gpuSub.Refresh()
+				}
 			} else {
-				g.lblGPU.SetText("N/A")
+				g.gpuValue.Text = "N/A"
+				g.gpuValue.Color = ColorText3
 			}
+			g.gpuValue.Refresh()
 
-			if sys.NICName != "" {
-				g.lblNIC.SetText(fmt.Sprintf("%s  %dMb/s  %s", sys.NICName, sys.NICSpeed, sys.NICType))
-			} else {
-				g.lblNIC.SetText("N/A")
-			}
-
+			// Swap
 			if sys.SwapTotalGB > 0 {
-				g.lblSwap.SetText(fmt.Sprintf("%d%%  %.1f/%.1fG", sys.SwapPct, sys.SwapUsedGB, sys.SwapTotalGB))
+				g.swapValue.Text = fmt.Sprintf("%d%%", sys.SwapPct)
+				g.swapValue.Color = barColor(sys.SwapPct)
+				if g.swapSub != nil {
+					g.swapSub.Text = fmt.Sprintf("%.1f / %.1f GB", sys.SwapUsedGB, sys.SwapTotalGB)
+					g.swapSub.Refresh()
+				}
 			} else {
-				g.lblSwap.SetText("N/A")
+				g.swapValue.Text = "N/A"
+				g.swapValue.Color = ColorText3
 			}
+			g.swapValue.Refresh()
 
+			// NIC
+			if sys.NICName != "" {
+				g.nicValue.Text = sys.NICName
+				g.nicValue.Color = ColorText
+				if g.nicSub != nil {
+					g.nicSub.Text = fmt.Sprintf("%d Mb/s  %s", sys.NICSpeed, sys.NICType)
+					g.nicSub.Refresh()
+				}
+			} else {
+				g.nicValue.Text = "N/A"
+				g.nicValue.Color = ColorText3
+			}
+			g.nicValue.Refresh()
+
+			// Fan
 			if sys.FanRPM > 0 {
-				g.lblFan.SetText(fmt.Sprintf("%d RPM", sys.FanRPM))
+				g.fanValue.Text = fmt.Sprintf("%d RPM", sys.FanRPM)
+				g.fanValue.Color = ColorText
 			} else {
-				g.lblFan.SetText("N/A")
+				g.fanValue.Text = "N/A"
+				g.fanValue.Color = ColorText3
 			}
+			g.fanValue.Refresh()
 
+			// Battery
 			if sys.BatPct != "N/A" {
-				g.lblBat.SetText(fmt.Sprintf("%s%%  %s", sys.BatPct, sys.BatStatus))
+				g.batValue.Text = fmt.Sprintf("%s%%", sys.BatPct)
+				g.batValue.Color = ColorText
 			} else {
-				g.lblBat.SetText("N/A")
+				g.batValue.Text = "N/A"
+				g.batValue.Color = ColorText3
 			}
+			g.batValue.Refresh()
 
-			g.lblUptime.SetText(sys.Uptime)
-
-			// Sync toggle button with streaming state
+			// Status
 			if g.cap.IsStreaming() {
-				g.lblStatus.SetText("LIVE")
-				g.lblStatus.Importance = widget.HighImportance
-				g.btnToggle.SetText("LIVE")
-				g.btnToggle.Importance = widget.HighImportance
-			} else {
-				g.lblStatus.SetText("OFFLINE")
-				g.lblStatus.Importance = widget.DangerImportance
-				g.btnToggle.SetText("OFFLINE")
+				g.statusDot.FillColor = ColorGreen
+				g.statusLabel.Text = "LIVE"
+				g.statusLabel.Color = ColorGreen
+				g.btnToggle.SetText("STOP")
 				g.btnToggle.Importance = widget.DangerImportance
+			} else {
+				g.statusDot.FillColor = ColorRed
+				g.statusLabel.Text = "OFFLINE"
+				g.statusLabel.Color = ColorRed
+				g.btnToggle.SetText("START")
+				g.btnToggle.Importance = widget.HighImportance
 			}
+			g.statusDot.Refresh()
+			g.statusLabel.Refresh()
+
+			// URL
+			g.urlLabel.Refresh()
 		})
 	}
 }
@@ -294,30 +542,19 @@ func (g *GUI) refreshClients() {
 		}
 
 		fyne.Do(func() {
-			g.clientCard.SetSubTitle(fmt.Sprintf("%d active", active))
+			g.clientCount.Text = fmt.Sprintf("%d active", active)
+			g.clientCount.Refresh()
 			g.clientList.Refresh()
 		})
 	}
 }
 
-func newCompactRow(label string, val string) *fyne.Container {
-	return container.NewHBox(
-		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		widget.NewLabel(val),
-	)
-}
-
-func newCompactLabelRow(label string, val *widget.Label) *fyne.Container {
-	return container.NewHBox(
-		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		val,
-	)
-}
-
-func newCompactItalicRow(label string, val *widget.Label) *fyne.Container {
-	val.TextStyle = fyne.TextStyle{Italic: true}
-	return container.NewHBox(
-		widget.NewLabelWithStyle(label, fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		val,
-	)
+func barColor(pct int) color.Color {
+	if pct >= 90 {
+		return ColorRed
+	}
+	if pct >= 70 {
+		return ColorYellow
+	}
+	return ColorGreen
 }
