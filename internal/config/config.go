@@ -17,7 +17,7 @@ type Config struct {
 	FPS        int
 	Quality    int
 	Resolution string
-	Headless   bool
+	NoBrowser  bool
 	NoAudio    bool
 	NoWebRTC   bool
 
@@ -34,7 +34,7 @@ func Parse() *Config {
 	flag.IntVar(&cfg.FPS, "fps", envInt("BIFROST_FPS", 30), "Capture frame rate")
 	flag.IntVar(&cfg.Quality, "quality", envInt("BIFROST_QUALITY", 40), "JPEG quality 1-100")
 	flag.StringVar(&cfg.Resolution, "resolution", envStr("BIFROST_RESOLUTION", "1920x1080"), "Capture resolution WxH")
-	flag.BoolVar(&cfg.Headless, "headless", false, "Skip TUI dashboard")
+	flag.BoolVar(&cfg.NoBrowser, "no-browser", false, "Do not auto-open admin panel in browser on startup")
 	flag.BoolVar(&cfg.NoAudio, "no-audio", false, "Disable audio capture")
 	flag.BoolVar(&cfg.NoWebRTC, "no-webrtc", false, "Disable WebRTC (MJPEG only)")
 

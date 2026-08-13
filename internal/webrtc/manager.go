@@ -143,6 +143,12 @@ func (m *Manager) PendingICE(peerID string) []webrtc.ICECandidateInit {
 	return candidates
 }
 
+func (m *Manager) PeerCount() int {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return len(m.peers)
+}
+
 func (m *Manager) removePeer(peerID string) {
 	m.mu.Lock()
 	defer m.mu.Unlock()

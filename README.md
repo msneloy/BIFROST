@@ -6,21 +6,19 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/nelobster/BIFROST)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org/)
 
-BIFROST is a zero-configuration **classroom screen broadcasting server** written in Go. It streams a teacher's desktop (video + audio) to student browsers over a local network via MJPEG and WebRTC. No client software required — just open a browser.
+BIFROST is a zero-configuration, lightweight **classroom screen broadcasting server** written in Go. It streams a teacher's desktop (video + audio) to student browsers over a local network via WebRTC (VP8+Opus) with automatic MJPEG fallback for 23+ concurrent students. No heavy desktop GUI or client software required — just launch the binary, and the admin interface opens directly in your browser.
 
 ---
 
 ## Features
 
-- **Unified Capture** — Single ffmpeg process captures video + audio for perfect sync
-- **Dual Streaming** — WebRTC (low-latency, VP8+Opus) with automatic MJPEG fallback
-- **Web Viewer** — Browser-based viewer with HUD overlay, sync/refresh/fullscreen controls
-- **Admin Dashboard** — Web-based control panel at `/admin` with live preview, system stats, client list
-- **mDNS Discovery** — Automatic LAN registration via `avahi-publish` (`bifrost.local`)
-- **TUI Dashboard** — Terminal dashboard fallback (`--headless`) with system stats
-- **Client Tracking** — IP, hostname, MAC, bandwidth, OS, browser, GPU, battery
-- **Windows Guard** — Automatic Windows client rejection with styled 403 page
-- **Health Endpoint** — JSON health check at `/health`
+- **Lightweight Pure-Go Binary** — ~16MB single binary, zero CGo GUI dependencies.
+- **Browser-First Experience** — Auto-launches the admin panel at `http://localhost:8080/admin` upon startup.
+- **Synchronized WebRTC Audio/Video** — Low-latency VP8 video + Opus audio stream for synchronized classroom playback.
+- **mDNS Network Registration** — Automatic LAN broadcast over `http://bifrost.local:8080/watch`.
+- **Teacher Admin Dashboard** — Built-in web panel with live preview, system telemetry, active WebRTC peer counts, and dynamic student QR code generation.
+- **Headless Server Mode** — `--no-browser` flag for running BIFROST on headless servers or SSH sessions.
+- **Client Telemetry & Guard** — Real-time tracking of IP, OS, browser, GPU, and battery stats.
 
 ---
 
@@ -29,9 +27,9 @@ BIFROST is a zero-configuration **classroom screen broadcasting server** written
 ### Prerequisites
 
 - **ffmpeg** — `sudo apt-get install ffmpeg`
-- **PulseAudio** — For system audio capture (most Linux distros have this)
+- **PulseAudio / PipeWire** — For system audio capture
 - **avahi-daemon & avahi-utils** (optional) — For mDNS discovery (`bifrost.local`)
-- **python3 + GStreamer** (optional) — For Wayland capture
+- **python3 + GStreamer** (optional) — For Wayland capture (`mutter_capture.py`)
 
 ### Build & Run
 
@@ -40,10 +38,10 @@ BIFROST is a zero-configuration **classroom screen broadcasting server** written
 git clone https://github.com/nelobster/BIFROST.git
 cd BIFROST
 
-# Build
+# Build pure-Go binary (~16MB)
 go build -o bifrost .
 
-# Run
+# Run (auto-launches admin panel in default browser)
 ./bifrost
 ```
 
@@ -56,7 +54,7 @@ bifrost [OPTIONS]
   --fps FPS           Capture frame rate (default: 30)
   --quality Q         JPEG quality 1-100 (default: 40)
   --resolution WxH    Capture resolution (default: 1920x1080)
-  --headless          Skip TUI dashboard
+  --no-browser        Disable automatic browser launch on startup
   --no-audio          Disable audio capture
   --no-webrtc         Disable WebRTC (MJPEG only)
 ```
@@ -67,20 +65,19 @@ bifrost [OPTIONS]
 
 ```
 bifrost (Go binary)
-├── main.go              Entry point & orchestration
+├── main.go              Entry point, browser auto-launch & orchestration
 ├── embed_assets.go      go:embed for web assets
 ├── internal/
-│   ├── config/          CLI flags, config parsing
-│   ├── capture/         Unified ffmpeg capture (video + audio + WebRTC RTP)
-│   ├── server/          HTTP server & endpoint handlers
-│   ├── webrtc/          Pion WebRTC peer management & RTP receiver
-│   ├── tracker/         Client tracking & bandwidth monitoring
+│   ├── config/          CLI flags & config parsing
+│   ├── capture/         Wayland/X11 video & audio stream capture
+│   ├── server/          HTTP server, WebRTC signaling & API handlers
+│   ├── webrtc/          Pion WebRTC peer management (VP8 + Opus)
+│   ├── tracker/         Client telemetry & bandwidth monitoring
 │   ├── stats/           System metrics from /proc and /sys
-│   ├── dashboard/       Terminal TUI (--headless fallback)
-│   └── mdns/            mDNS via avahi-publish
+│   └── mdns/            mDNS registration via avahi-publish
 └── web/
-    ├── player.html      Student viewer (WebRTC + MJPEG fallback)
-    └── admin.html       Teacher admin dashboard
+    ├── player.html      Student WebRTC viewer (`/watch`)
+    └── admin.html       Teacher Web Admin dashboard (`/admin`)
 ```
 
 ---
@@ -89,71 +86,16 @@ bifrost (Go binary)
 
 | Endpoint        | Method | Description                                    |
 | --------------- | ------ | ---------------------------------------------- |
-| `/`             | GET    | Student viewer (WebRTC + MJPEG fallback)       |
-| `/admin`        | GET    | Teacher admin dashboard                        |
-| `/stream`       | GET    | MJPEG video stream (`multipart/x-mixed-replace`) |
-| `/frame`        | GET    | Single latest JPEG frame                       |
+| `/watch`        | GET    | Primary Student Viewer (WebRTC + MJPEG)        |
+| `/admin`        | GET    | Teacher Admin Dashboard                        |
+| `/stream`       | GET    | Multiplexed stream (`multipart/x-mixed-replace`) |
+| `/frame`        | GET    | Single latest JPEG snapshot                    |
 | `/audio`        | GET    | MP3 audio stream                               |
-| `/ping`         | GET    | Client telemetry (latency, OS, browser, GPU)   |
+| `/ping`         | GET    | Client telemetry (latency, OS, browser, battery)|
 | `/health`       | GET    | JSON health check                              |
-| `/stats`        | GET    | JSON system stats                              |
-| `/api/clients`  | GET    | JSON client list (admin dashboard)             |
-| `/api/stats`    | GET    | JSON system stats (admin dashboard)            |
+| `/api/stats`    | GET    | System stats & WebRTC peer counts              |
+| `/api/clients`  | GET    | Active connected client telemetry              |
 | `/webrtc/offer` | POST   | WebRTC SDP signaling                           |
-
----
-
-## TUI Dashboard
-
-The terminal dashboard (BASHTOP-style, available with `--headless` or when no display server is running) displays:
-
-```
-╭── BIFROST v0.2.0 ── 192.168.1.100:8080 ── [12:34:56] ── uptime: 3d 12h ──╮
-│                                                                             │
-╭── SYSTEM ───────────────────────────────────────────────────────────────────╮
-│ CPU: ██████░░░░░░░░░ 52%  3200MHz 45°C                                    │
-│ RAM: ████░░░░░░░░░░░ 42%  6.7/16.0G                                       │
-│ GPU: ░░░░░░░░░░░░░░░ --   0MHz 0°C                                        │
-│ DISK: ███████████░░░░ 85%  213/256G                                        │
-│ NIC: wlp2s0 866Mb/s WiFi                      SWAP: ░░░░░░░░ 5% 0.5/4.0G │
-│ FAN: 1200 RPM                                 BAT:  85% Charging           │
-╰─────────────────────────────────────────────────────────────────────────────╯
-╭── STUDENTS (3 active) ─────────────────────────────────────────────────────╮
-│ S │ # │ DEV │ IP ADDRESS     │ OS/BROWSER    │ BANDWIDTH      │ TOTAL     │
-│ ● │ 1 │ 📱  │ 192.168.0.50  │ Linux/Chrome  │ 2.1M/s         │ 88.1M     │
-│ ● │ 2 │ 💻  │ 192.168.0.51  │ Linux/Firefox │ 1.5M/s         │ 32.1M     │
-│ ○ │ 3 │ 💻  │ 192.168.0.52  │ Android/Chrome│ 0.0M/s         │ 10.8M     │
-╰─────────────────────────────────────────────────────────────────────────────╯
-```
-
----
-
-## Dependencies
-
-### Required
-
-| Package | Purpose | Install |
-|---------|---------|---------|
-| ffmpeg | Screen/audio capture | `apt install ffmpeg` |
-| PulseAudio | System audio capture | Pre-installed on most desktop Linux |
-
-### Optional
-
-| Package | Purpose | Install |
-|---------|---------|---------|
-| avahi-daemon | mDNS discovery | `apt install avahi-daemon avahi-utils` |
-| python3 + GStreamer | Wayland capture | `apt install python3 gir1.2-gst-1.0` |
-
----
-
-## Deployment
-
-### Manual
-
-```bash
-./bifrost              # With TUI dashboard
-./bifrost --headless   # Without TUI (for SSH/headless)
-```
 
 ---
 
@@ -161,7 +103,7 @@ The terminal dashboard (BASHTOP-style, available with `--headless` or when no di
 
 | Device  | Browser        | WebRTC | MJPEG |
 | ------- | -------------- | ------ | ----- |
-| Linux   | Chrome/Firefox | ✅     | ✅    |
+| Linux   | Chrome/Firefox/Brave | ✅ | ✅ |
 | Android | Chrome         | ✅     | ✅    |
 | Windows | Any            | ❌     | ❌    |
 

@@ -4,13 +4,14 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"os/exec"
 	"os/signal"
+	"runtime"
 	"syscall"
 	"time"
 
 	"github.com/nelobster/bifrost/internal/capture"
 	"github.com/nelobster/bifrost/internal/config"
-	bifrostgui "github.com/nelobster/bifrost/internal/gui"
 	"github.com/nelobster/bifrost/internal/mdns"
 	"github.com/nelobster/bifrost/internal/server"
 	"github.com/nelobster/bifrost/internal/tracker"
@@ -84,19 +85,18 @@ func main() {
 		}
 	}()
 
-	// GUI or headless mode
-	if !cfg.Headless {
-		// Run native Fyne GUI (blocks until window closes)
-		log.Println("[*] Launching GUI...")
-		go func() {
-			<-ctx.Done()
-			bifrostgui.Quit()
-		}()
-		bifrostgui.Run(cfg, cap, trk)
+	// Open admin panel in browser (unless --no-browser flag is set)
+	if !cfg.NoBrowser {
+		adminURL := fmt.Sprintf("http://localhost:%d/admin", cfg.Port)
+		log.Printf("[*] Opening admin panel: %s", adminURL)
+		// Small delay to let the HTTP server bind before opening the browser
+		time.AfterFunc(500*time.Millisecond, func() { openBrowser(adminURL) })
 	} else {
-		log.Println("[+] Running in headless mode. Press Ctrl+C to stop.")
-		<-ctx.Done()
+		log.Printf("[+] Running headless. Admin panel: http://%s:%d/admin", cfg.LocalIP, cfg.Port)
 	}
+
+	// Wait for shutdown signal
+	<-ctx.Done()
 
 	// Graceful shutdown
 	log.Println("[*] Shutting down...")
@@ -105,6 +105,24 @@ func main() {
 	srv.Stop(shutdownCtx)
 	cap.Stop()
 	log.Println("[+] BIFROST stopped.")
+}
+
+// openBrowser opens the given URL in the system's default browser.
+func openBrowser(url string) {
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "linux":
+		cmd = exec.Command("xdg-open", url)
+	case "darwin":
+		cmd = exec.Command("open", url)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
+	default:
+		return
+	}
+	if err := cmd.Start(); err != nil {
+		log.Printf("[!] Could not open browser: %v", err)
+	}
 }
 
 func showBanner(cfg *config.Config) {
@@ -125,13 +143,10 @@ func showBanner(cfg *config.Config) {
   ║                                                              ║
   ╚══════════════════════════════════════════════════════════════╝
 
-  Stream URL:    http://%s:%d
-  Stream URL:    http://%s:%d/watch
   Admin Panel:   http://%s:%d/admin
-  Frame URL:     http://%s:%d/frame
-  Audio URL:     http://%s:%d/audio
+  Student URL:   http://bifrost.local:%d/watch (mDNS)
+  Student IP:    http://%s:%d/watch
   Health:        http://%s:%d/health
-  Stats:         http://%s:%d/stats
 
   Resolution:    %s
   FPS:           %d
@@ -141,10 +156,7 @@ func showBanner(cfg *config.Config) {
 
 `, config.Version,
 		cfg.LocalIP, cfg.Port,
-		cfg.LocalIP, cfg.Port,
-		cfg.LocalIP, cfg.Port,
-		cfg.LocalIP, cfg.Port,
-		cfg.LocalIP, cfg.Port,
+		cfg.Port,
 		cfg.LocalIP, cfg.Port,
 		cfg.LocalIP, cfg.Port,
 		cfg.Resolution, cfg.FPS, cfg.Quality,

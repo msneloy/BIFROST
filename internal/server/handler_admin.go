@@ -46,11 +46,17 @@ func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAPIStats(w http.ResponseWriter, r *http.Request) {
 	sys := stats.Collect()
 
+	webrtcPeers := 0
+	if s.webrtcMgr != nil {
+		webrtcPeers = s.webrtcMgr.PeerCount()
+	}
+
 	result := map[string]interface{}{
-		"streaming": s.capture.IsStreaming(),
-		"clients":   s.tracker.CountActive(),
-		"uptime":    sys.Uptime,
-		"hostname":  sys.CPUModel,
+		"streaming":    s.capture.IsStreaming(),
+		"clients":      s.tracker.CountActive(),
+		"webrtc_peers": webrtcPeers,
+		"uptime":       sys.Uptime,
+		"hostname":     sys.CPUModel,
 	}
 
 	// CPU

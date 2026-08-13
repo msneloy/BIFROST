@@ -266,17 +266,22 @@ function getDeviceInfo() {
   return { os, browser, device, gpu, resolution: `${screen.width}x${screen.height}` };
 }
 
-function sendPing(extra = {}) {
+let _batteryPct = '';
+if (navigator.getBattery) {
+  navigator.getBattery().then(b => {
+    _batteryPct = Math.round(b.level * 100);
+    b.onlevelchange = () => { _batteryPct = Math.round(b.level * 100); };
+  });
+}
+
+function sendPing() {
   const info = getDeviceInfo();
   const params = new URLSearchParams({
     latency: lastRTT || '', os: info.os, browser: info.browser,
     resolution: info.resolution, device: info.device, gpu: info.gpu,
-    battery: extra.battery || ''
+    battery: _batteryPct
   });
   fetch(`/ping?${params}`).catch(() => {});
-  if (navigator.getBattery) {
-    navigator.getBattery().then(b => sendPing({ battery: Math.round(b.level * 100) }));
-  }
 }
 setInterval(sendPing, 2000);
 
