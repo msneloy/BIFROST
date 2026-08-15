@@ -1,598 +1,974 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<title>BIFROST — Live Stream</title>
-<style>
-:root {
-  --accent: #e53935;
-  --accent-dim: rgba(229,57,53,0.15);
-  --bg: #000;
-  --surface: rgba(20,20,20,0.92);
-  --border: rgba(255,255,255,0.08);
-  --text: #fff;
-  --text2: rgba(255,255,255,0.6);
-  --green: #4caf50;
-  --yellow: #ffc107;
-  --red: #e53935;
-}
-* { margin:0; padding:0; box-sizing:border-box; }
-body { background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif; height:100vh; overflow:hidden; }
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <meta
+      http-equiv="Cache-Control"
+      content="no-cache, no-store, must-revalidate"
+    />
+    <title>BIFROST — Live Stream</title>
+    <style>
+      :root {
+        --accent: #e53935;
+        --accent-dim: rgba(229, 57, 53, 0.15);
+        --bg: #000;
+        --surface: rgba(20, 20, 20, 0.92);
+        --border: rgba(255, 255, 255, 0.08);
+        --text: #fff;
+        --text2: rgba(255, 255, 255, 0.6);
+        --green: #4caf50;
+        --yellow: #ffc107;
+        --red: #e53935;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family:
+          -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        height: 100vh;
+        overflow: hidden;
+      }
 
-/* ─── Video container ────────────────────────────────────────── */
-#video-container {
-  position:relative; width:100vw; height:100vh;
-  display:flex; align-items:center; justify-content:center;
-  background:#000;
-}
-video, canvas, img#mjpeg {
-  max-width:100%; max-height:100%; object-fit:contain;
-}
+      /* ─── Video container ────────────────────────────────────────── */
+      #video-container {
+        position: relative;
+        width: 100vw;
+        height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: #000;
+      }
+      video,
+      canvas,
+      img#mjpeg {
+        max-width: 100%;
+        max-height: 100%;
+        object-fit: contain;
+      }
 
-/* ─── HUD overlay ────────────────────────────────────────────── */
-.hud {
-  position:absolute; top:16px; left:16px; z-index:20;
-  background:var(--surface); backdrop-filter:blur(16px);
-  border:1px solid var(--border); border-radius:12px;
-  padding:10px 16px; display:flex; align-items:center; gap:10px;
-  font-size:13px; font-weight:600; letter-spacing:0.5px;
-  transition:opacity .3s;
-}
-.hud-dot {
-  width:10px; height:10px; border-radius:50%;
-  background:#555; transition:all .3s;
-}
-.hud-dot.live { background:var(--green); box-shadow:0 0 10px var(--green); }
-.hud-dot.reconnecting { background:var(--yellow); animation:pulse 1s infinite; }
-.hud-dot.offline { background:var(--red); }
-@keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.4} }
-.hud-label { text-transform:uppercase; letter-spacing:1px; font-size:11px; }
-.hud-latency {
-  margin-left:4px; font-size:11px; font-weight:400;
-  color:var(--text2); font-variant-numeric:tabular-nums;
-}
-
-/* ─── Controls ───────────────────────────────────────────────── */
-.controls {
-  position:absolute; top:16px; right:16px; z-index:20;
-  display:flex; gap:6px;
-  opacity:0; transition:opacity .3s;
-}
-#video-container:hover .controls { opacity:1; }
-.ctrl-btn {
-  background:var(--surface); backdrop-filter:blur(16px);
-  border:1px solid var(--border); color:var(--text);
-  font-family:inherit; font-size:12px; font-weight:500;
-  padding:8px 14px; border-radius:8px; cursor:pointer;
-  transition:all .15s; display:flex; align-items:center; gap:6px;
-}
-.ctrl-btn:hover { background:rgba(255,255,255,0.1); border-color:rgba(255,255,255,0.15); }
-.ctrl-btn:active { transform:scale(0.97); }
-.ctrl-btn svg { width:14px; height:14px; fill:currentColor; }
-
-/* ─── Metrics bar ────────────────────────────────────────────── */
-.metrics {
-  position:absolute; bottom:16px; right:16px; z-index:20;
-  background:var(--surface); backdrop-filter:blur(16px);
-  border:1px solid var(--border); border-radius:10px;
-  padding:8px 14px; display:flex; gap:16px;
-  font-size:12px; font-weight:500;
-  opacity:0; transition:opacity .3s;
-}
-#video-container:hover .metrics { opacity:1; }
-.metric { display:flex; align-items:center; gap:6px; }
-.metric-label { color:var(--text2); font-size:10px; text-transform:uppercase; letter-spacing:1px; }
-.metric-value { font-variant-numeric:tabular-nums; font-weight:600; }
-.metric-value.good { color:var(--green); }
-.metric-value.warn { color:var(--yellow); }
-.metric-value.bad { color:var(--red); }
-
-/* ─── Connecting screen ──────────────────────────────────────── */
-#connecting {
-  position:absolute; inset:0; z-index:30;
-  display:flex; flex-direction:column; align-items:center; justify-content:center;
-  background:var(--bg); gap:16px;
-}
-#connecting .logo { font-size:36px; font-weight:800; color:var(--accent); letter-spacing:4px; }
-#connecting .sub { color:var(--text2); font-size:14px; }
-#connecting .spinner {
-  width:32px; height:32px; border:3px solid var(--border);
-  border-top-color:var(--accent); border-radius:50%;
-  animation:spin .8s linear infinite;
-}
-@keyframes spin { to { transform:rotate(360deg); } }
-
-/* ─── Volume control ─────────────────────────────────────────── */
-.volume-wrap {
-  position:absolute; bottom:16px; left:16px; z-index:20;
-  display:flex; align-items:center; gap:8px;
-  background:var(--surface); backdrop-filter:blur(16px);
-  border:1px solid var(--border); border-radius:10px;
-  padding:6px 12px;
-  opacity:0; transition:opacity .3s;
-}
-#video-container:hover .volume-wrap { opacity:1; }
-.volume-wrap svg { width:16px; height:16px; fill:var(--text2); cursor:pointer; }
-.volume-slider {
-  -webkit-appearance:none; appearance:none;
-  width:80px; height:4px; background:var(--border); border-radius:2px; outline:none;
-}
-.volume-slider::-webkit-slider-thumb {
-  -webkit-appearance:none; width:12px; height:12px;
-  background:var(--text); border-radius:50%; cursor:pointer;
-}
-</style>
-</head>
-<body>
-<div id="video-container">
-  <video id="video" autoplay playsinline muted style="display:none"></video>
-  <canvas id="canvas" style="display:none"></canvas>
-  <img id="mjpeg" style="display:none">
-  <audio id="audio" style="display:none"></audio>
-
-  <!-- HUD -->
-  <div class="hud">
-    <div class="hud-dot" id="dot"></div>
-    <span class="hud-label" id="label">CONNECTING</span>
-    <span class="hud-latency" id="latency"></span>
-  </div>
-
-  <!-- Controls -->
-  <div class="controls">
-    <button class="ctrl-btn" id="btn-sync" title="Reconnect">
-      <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-      Sync
-    </button>
-    <button class="ctrl-btn" id="btn-refresh" title="Refresh">
-      <svg viewBox="0 0 24 24"><path d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
-    </button>
-    <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen">
-      <svg viewBox="0 0 24 24"><path d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"/></svg>
-      Full
-    </button>
-  </div>
-
-  <!-- Metrics -->
-  <div class="metrics">
-    <div class="metric">
-      <span class="metric-label">FPS</span>
-      <span class="metric-value" id="m-fps">--</span>
-    </div>
-    <div class="metric">
-      <span class="metric-label">LAT</span>
-      <span class="metric-value" id="m-lat">--</span>
-    </div>
-    <div class="metric">
-      <span class="metric-label">MODE</span>
-      <span class="metric-value" id="m-mode">--</span>
-    </div>
-  </div>
-
-  <!-- Volume -->
-  <div class="volume-wrap">
-    <svg id="vol-icon" viewBox="0 0 24 24" onclick="toggleMute()"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>
-    <input type="range" class="volume-slider" id="vol-slider" min="0" max="1" step="0.05" value="1" oninput="setVolume(this.value)">
-  </div>
-
-  <!-- Connecting -->
-  <div id="connecting">
-    <div class="logo">BIFROST</div>
-    <div class="spinner"></div>
-    <div class="sub">Establishing connection...</div>
-  </div>
-</div>
-
-<script>
-const $ = id => document.getElementById(id);
-const video = $('video');
-const canvas = $('canvas');
-const canvasCtx = canvas.getContext('2d');
-const audioEl = $('audio');
-const dot = $('dot');
-const label = $('label');
-const latencyEl = $('latency');
-const connecting = $('connecting');
-const mFps = $('m-fps');
-const mLat = $('m-lat');
-const mMode = $('m-mode');
-
-let pc = null;
-let lastRTT = null;
-let mode = 'auto';
-let retryCount = 0;
-
-// ─── Metrics ───────────────────────────────────────────────────
-let frameTimestamps = [];
-let mjpegLatencies = [];
-
-function updateMetrics() {
-  const now = Date.now();
-  if (mode === 'webrtc' && pc) {
-    pc.getStats().then(report => {
-      report.forEach(s => {
-        if (s.type === 'inbound-rtp' && s.kind === 'video') {
-          const fps = s.framesPerSecond || 0;
-          mFps.textContent = fps;
-          mFps.className = 'metric-value ' + (fps < 15 ? 'bad' : fps < 25 ? 'warn' : 'good');
+      /* ─── HUD overlay ────────────────────────────────────────────── */
+      .hud {
+        position: absolute;
+        top: 16px;
+        left: 16px;
+        z-index: 20;
+        background: var(--surface);
+        backdrop-filter: blur(16px);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 10px 16px;
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.5px;
+        transition: opacity 0.3s;
+      }
+      .hud-dot {
+        width: 10px;
+        height: 10px;
+        border-radius: 50%;
+        background: #555;
+        transition: all 0.3s;
+      }
+      .hud-dot.live {
+        background: var(--green);
+        box-shadow: 0 0 10px var(--green);
+      }
+      .hud-dot.reconnecting {
+        background: var(--yellow);
+        animation: pulse 1s infinite;
+      }
+      .hud-dot.offline {
+        background: var(--red);
+      }
+      @keyframes pulse {
+        0%,
+        100% {
+          opacity: 1;
         }
-        if (s.type === 'candidate-pair' && s.state === 'succeeded') {
-          const rtt = s.currentRoundTripTime ? Math.round(s.currentRoundTripTime * 1000) : null;
-          if (rtt !== null) {
-            lastRTT = rtt;
-            mLat.textContent = rtt + 'ms';
-            mLat.className = 'metric-value ' + (rtt > 200 ? 'bad' : rtt > 100 ? 'warn' : 'good');
-            latencyEl.textContent = rtt + 'ms';
+        50% {
+          opacity: 0.4;
+        }
+      }
+      .hud-label {
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        font-size: 11px;
+      }
+      .hud-latency {
+        margin-left: 4px;
+        font-size: 11px;
+        font-weight: 400;
+        color: var(--text2);
+        font-variant-numeric: tabular-nums;
+      }
+
+      /* ─── Controls ───────────────────────────────────────────────── */
+      .controls {
+        position: absolute;
+        top: 16px;
+        right: 16px;
+        z-index: 20;
+        display: flex;
+        gap: 6px;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      #video-container:hover .controls {
+        opacity: 1;
+      }
+      .ctrl-btn {
+        background: var(--surface);
+        backdrop-filter: blur(16px);
+        border: 1px solid var(--border);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 12px;
+        font-weight: 500;
+        padding: 8px 14px;
+        border-radius: 8px;
+        cursor: pointer;
+        transition: all 0.15s;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .ctrl-btn:hover {
+        background: rgba(255, 255, 255, 0.1);
+        border-color: rgba(255, 255, 255, 0.15);
+      }
+      .ctrl-btn:active {
+        transform: scale(0.97);
+      }
+      .ctrl-btn svg {
+        width: 14px;
+        height: 14px;
+        fill: currentColor;
+      }
+
+      /* ─── Metrics bar ────────────────────────────────────────────── */
+      .metrics {
+        position: absolute;
+        bottom: 16px;
+        right: 16px;
+        z-index: 20;
+        background: var(--surface);
+        backdrop-filter: blur(16px);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 8px 14px;
+        display: flex;
+        gap: 16px;
+        font-size: 12px;
+        font-weight: 500;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      #video-container:hover .metrics {
+        opacity: 1;
+      }
+      .metric {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .metric-label {
+        color: var(--text2);
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+      }
+      .metric-value {
+        font-variant-numeric: tabular-nums;
+        font-weight: 600;
+      }
+      .metric-value.good {
+        color: var(--green);
+      }
+      .metric-value.warn {
+        color: var(--yellow);
+      }
+      .metric-value.bad {
+        color: var(--red);
+      }
+
+      /* ─── Connecting screen ──────────────────────────────────────── */
+      #connecting {
+        position: absolute;
+        inset: 0;
+        z-index: 30;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg);
+        gap: 16px;
+      }
+      #connecting .logo {
+        font-size: 36px;
+        font-weight: 800;
+        color: var(--accent);
+        letter-spacing: 4px;
+      }
+      #connecting .sub {
+        color: var(--text2);
+        font-size: 14px;
+      }
+      #connecting .spinner {
+        width: 32px;
+        height: 32px;
+        border: 3px solid var(--border);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      @keyframes spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+
+      /* ─── Volume control ─────────────────────────────────────────── */
+      .volume-wrap {
+        position: absolute;
+        bottom: 16px;
+        left: 16px;
+        z-index: 20;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        background: var(--surface);
+        backdrop-filter: blur(16px);
+        border: 1px solid var(--border);
+        border-radius: 10px;
+        padding: 6px 12px;
+        opacity: 0;
+        transition: opacity 0.3s;
+      }
+      #video-container:hover .volume-wrap {
+        opacity: 1;
+      }
+      .volume-wrap svg {
+        width: 16px;
+        height: 16px;
+        fill: var(--text2);
+        cursor: pointer;
+      }
+      .volume-slider {
+        -webkit-appearance: none;
+        appearance: none;
+        width: 80px;
+        height: 4px;
+        background: var(--border);
+        border-radius: 2px;
+        outline: none;
+      }
+      .volume-slider::-webkit-slider-thumb {
+        -webkit-appearance: none;
+        width: 12px;
+        height: 12px;
+        background: var(--text);
+        border-radius: 50%;
+        cursor: pointer;
+      }
+
+      /* Audio overlay */
+      #audio-overlay {
+        position: absolute;
+        inset: 0;
+        z-index: 60;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        pointer-events: none;
+      }
+      .overlay-card {
+        pointer-events: auto;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        padding: 18px 22px;
+        border-radius: 12px;
+        text-align: center;
+        backdrop-filter: blur(12px);
+      }
+      .overlay-title {
+        font-size: 20px;
+        font-weight: 800;
+        color: var(--accent);
+        letter-spacing: 4px;
+      }
+      .overlay-sub {
+        color: var(--text2);
+        margin-top: 8px;
+        font-size: 13px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="video-container">
+      <video
+        id="video"
+        autoplay
+        playsinline
+        muted
+        style="display: none"
+      ></video>
+      <canvas id="canvas" style="display: none"></canvas>
+      <img id="mjpeg" style="display: none" />
+      <audio id="audio" style="display: none"></audio>
+
+      <!-- HUD -->
+      <div class="hud">
+        <div class="hud-dot" id="dot"></div>
+        <span class="hud-label" id="label">CONNECTING</span>
+        <span class="hud-latency" id="latency"></span>
+      </div>
+
+      <!-- Controls -->
+      <div class="controls">
+        <button class="ctrl-btn" id="btn-sync" title="Reconnect">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+            />
+          </svg>
+          Sync
+        </button>
+        <button class="ctrl-btn" id="btn-refresh" title="Refresh">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M17.65 6.35A7.958 7.958 0 0012 4c-4.42 0-7.99 3.58-7.99 8s3.57 8 7.99 8c3.73 0 6.84-2.55 7.73-6h-2.08A5.99 5.99 0 0112 18c-3.31 0-6-2.69-6-6s2.69-6 6-6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"
+            />
+          </svg>
+        </button>
+        <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen">
+          <svg viewBox="0 0 24 24">
+            <path
+              d="M7 14H5v5h5v-2H7v-3zm-2-4h2V7h3V5H5v5zm12 7h-3v2h5v-5h-2v3zM14 5v2h3v3h2V5h-5z"
+            />
+          </svg>
+          Full
+        </button>
+      </div>
+
+      <!-- Metrics -->
+      <div class="metrics">
+        <div class="metric">
+          <span class="metric-label">FPS</span>
+          <span class="metric-value" id="m-fps">--</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">LAT</span>
+          <span class="metric-value" id="m-lat">--</span>
+        </div>
+        <div class="metric">
+          <span class="metric-label">MODE</span>
+          <span class="metric-value" id="m-mode">--</span>
+        </div>
+      </div>
+
+      <!-- Volume -->
+      <div class="volume-wrap">
+        <svg id="vol-icon" viewBox="0 0 24 24" onclick="toggleMute()">
+          <path
+            d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"
+          />
+        </svg>
+        <input
+          type="range"
+          class="volume-slider"
+          id="vol-slider"
+          min="0"
+          max="1"
+          step="0.05"
+          value="1"
+          oninput="setVolume(this.value)"
+        />
+      </div>
+
+      <!-- Connecting -->
+      <div id="connecting">
+        <div class="logo">BIFROST</div>
+        <div class="spinner"></div>
+        <div class="sub">Establishing connection...</div>
+      </div>
+
+      <!-- Audio enable overlay (shown when remote audio track arrives) -->
+      <div id="audio-overlay" style="display: none">
+        <div class="overlay-card">
+          <div class="overlay-title">BIFROST</div>
+          <div class="overlay-sub">Click to start the stream with audio</div>
+          <button id="overlay-start" class="ctrl-btn" style="margin-top: 12px">
+            Start stream &amp; audio
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+      const video = $("video");
+      const canvas = $("canvas");
+      const canvasCtx = canvas.getContext("2d");
+      const audioEl = $("audio");
+      const audioOverlay = $("audio-overlay");
+      const overlayStart = $("overlay-start");
+      const dot = $("dot");
+      const label = $("label");
+      const latencyEl = $("latency");
+      const connecting = $("connecting");
+      const mFps = $("m-fps");
+      const mLat = $("m-lat");
+      const mMode = $("m-mode");
+
+      let pc = null;
+      let lastRTT = null;
+      let mode = "auto";
+      let retryCount = 0;
+
+      // ─── Metrics ───────────────────────────────────────────────────
+      let frameTimestamps = [];
+      let mjpegLatencies = [];
+
+      function updateMetrics() {
+        const now = Date.now();
+        if (mode === "webrtc" && pc) {
+          pc.getStats().then((report) => {
+            report.forEach((s) => {
+              if (s.type === "inbound-rtp" && s.kind === "video") {
+                const fps = s.framesPerSecond || 0;
+                mFps.textContent = fps;
+                mFps.className =
+                  "metric-value " +
+                  (fps < 15 ? "bad" : fps < 25 ? "warn" : "good");
+              }
+              if (s.type === "candidate-pair" && s.state === "succeeded") {
+                const rtt = s.currentRoundTripTime
+                  ? Math.round(s.currentRoundTripTime * 1000)
+                  : null;
+                if (rtt !== null) {
+                  lastRTT = rtt;
+                  mLat.textContent = rtt + "ms";
+                  mLat.className =
+                    "metric-value " +
+                    (rtt > 200 ? "bad" : rtt > 100 ? "warn" : "good");
+                  latencyEl.textContent = rtt + "ms";
+                }
+              }
+            });
+          });
+        } else if (mode === "mjpeg") {
+          frameTimestamps = frameTimestamps.filter((t) => now - t < 1000);
+          const fps = frameTimestamps.length;
+          mFps.textContent = fps;
+          mFps.className =
+            "metric-value " + (fps < 10 ? "bad" : fps < 20 ? "warn" : "good");
+          if (mjpegLatencies.length > 0) {
+            const avg = Math.round(
+              mjpegLatencies.reduce((a, b) => a + b, 0) / mjpegLatencies.length,
+            );
+            mLat.textContent = avg + "ms";
+            mLat.className =
+              "metric-value " +
+              (avg > 500 ? "bad" : avg > 200 ? "warn" : "good");
+            latencyEl.textContent = avg + "ms";
           }
+        }
+        mMode.textContent = mode.toUpperCase();
+      }
+      setInterval(updateMetrics, 1000);
+
+      // ─── Client fingerprinting ─────────────────────────────────────
+      function getDeviceInfo() {
+        const ua = navigator.userAgent;
+        let os = "Unknown",
+          browser = "Unknown",
+          device = "desktop";
+        if (/android/i.test(ua)) {
+          os = "Android";
+          device = "mobile";
+        } else if (/iphone|ipad/i.test(ua)) {
+          os = "iOS";
+          device = "mobile";
+        } else if (/linux/i.test(ua)) os = "Linux";
+        else if (/mac/i.test(ua)) os = "macOS";
+        else if (/windows/i.test(ua)) os = "Windows";
+        if (/chrome/i.test(ua) && !/edg/i.test(ua)) browser = "Chrome";
+        else if (/firefox/i.test(ua)) browser = "Firefox";
+        else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = "Safari";
+        else if (/edg/i.test(ua)) browser = "Edge";
+        let gpu = "Unknown";
+        try {
+          const c = document.createElement("canvas");
+          const gl = c.getContext("webgl");
+          if (gl) {
+            const ext = gl.getExtension("WEBGL_debug_renderer_info");
+            if (ext) gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL);
+          }
+        } catch (e) {}
+        return {
+          os,
+          browser,
+          device,
+          gpu,
+          resolution: `${screen.width}x${screen.height}`,
+        };
+      }
+
+      let _batteryPct = "";
+      if (navigator.getBattery) {
+        navigator.getBattery().then((b) => {
+          _batteryPct = Math.round(b.level * 100);
+          b.onlevelchange = () => {
+            _batteryPct = Math.round(b.level * 100);
+          };
+        });
+      }
+
+      function sendPing() {
+        const info = getDeviceInfo();
+        const params = new URLSearchParams({
+          latency: lastRTT || "",
+          os: info.os,
+          browser: info.browser,
+          resolution: info.resolution,
+          device: info.device,
+          gpu: info.gpu,
+          battery: _batteryPct,
+        });
+        fetch(`/ping?${params}`).catch(() => {});
+      }
+      setInterval(sendPing, 2000);
+
+      // ─── Volume ────────────────────────────────────────────────────
+      function setVolume(v) {
+        audioEl.volume = v;
+        video.volume = v;
+      }
+      function toggleMute() {
+        const muted = (audioEl.muted = video.muted = !audioEl.muted);
+        $("vol-icon").style.opacity = muted ? "0.4" : "1";
+      }
+
+      // Unmute video on first user interaction (browser autoplay policy)
+      let _audioUnmuted = false;
+      function unmuteOnInteraction() {
+        if (_audioUnmuted) return;
+        _audioUnmuted = true;
+        video.muted = false;
+        audioEl.muted = false;
+        $("vol-icon").style.opacity = "1";
+        if (audioOverlay) audioOverlay.style.display = "none";
+      }
+      document.addEventListener("click", unmuteOnInteraction, { once: true });
+      document.addEventListener("keydown", unmuteOnInteraction, { once: true });
+
+      function showAudioOverlay() {
+        if (!audioOverlay) return;
+        if (_audioUnmuted) return;
+        audioOverlay.style.display = "flex";
+      }
+
+      function hideAudioOverlay() {
+        if (!audioOverlay) return;
+        audioOverlay.style.display = "none";
+      }
+
+      // Overlay button: enable audio and start playback
+      if (overlayStart) {
+        overlayStart.addEventListener("click", () => {
+          unmuteOnInteraction();
+          if (audioCtx && audioCtx.state === "suspended")
+            audioCtx.resume().catch(() => {});
+          // attempt to start playback of video (user gesture)
+          video.play().catch(() => {});
+          hideAudioOverlay();
+        });
+      }
+
+      // Allow keyboard (Space / Enter) to activate the overlay
+      document.addEventListener("keydown", (e) => {
+        if (!audioOverlay) return;
+        if (audioOverlay.style.display === "none") return;
+        if (e.key === " " || e.key === "Enter") {
+          e.preventDefault();
+          if (overlayStart) overlayStart.click();
         }
       });
-    });
-  } else if (mode === 'mjpeg') {
-    frameTimestamps = frameTimestamps.filter(t => now - t < 1000);
-    const fps = frameTimestamps.length;
-    mFps.textContent = fps;
-    mFps.className = 'metric-value ' + (fps < 10 ? 'bad' : fps < 20 ? 'warn' : 'good');
-    if (mjpegLatencies.length > 0) {
-      const avg = Math.round(mjpegLatencies.reduce((a, b) => a + b, 0) / mjpegLatencies.length);
-      mLat.textContent = avg + 'ms';
-      mLat.className = 'metric-value ' + (avg > 500 ? 'bad' : avg > 200 ? 'warn' : 'good');
-      latencyEl.textContent = avg + 'ms';
-    }
-  }
-  mMode.textContent = mode.toUpperCase();
-}
-setInterval(updateMetrics, 1000);
 
-// ─── Client fingerprinting ─────────────────────────────────────
-function getDeviceInfo() {
-  const ua = navigator.userAgent;
-  let os = 'Unknown', browser = 'Unknown', device = 'desktop';
-  if (/android/i.test(ua)) { os = 'Android'; device = 'mobile'; }
-  else if (/iphone|ipad/i.test(ua)) { os = 'iOS'; device = 'mobile'; }
-  else if (/linux/i.test(ua)) os = 'Linux';
-  else if (/mac/i.test(ua)) os = 'macOS';
-  else if (/windows/i.test(ua)) os = 'Windows';
-  if (/chrome/i.test(ua) && !/edg/i.test(ua)) browser = 'Chrome';
-  else if (/firefox/i.test(ua)) browser = 'Firefox';
-  else if (/safari/i.test(ua) && !/chrome/i.test(ua)) browser = 'Safari';
-  else if (/edg/i.test(ua)) browser = 'Edge';
-  let gpu = 'Unknown';
-  try {
-    const c = document.createElement('canvas');
-    const gl = c.getContext('webgl');
-    if (gl) { const ext = gl.getExtension('WEBGL_debug_renderer_info'); if (ext) gpu = gl.getParameter(ext.UNMASKED_RENDERER_WEBGL); }
-  } catch(e) {}
-  return { os, browser, device, gpu, resolution: `${screen.width}x${screen.height}` };
-}
+      // ─── WebRTC ────────────────────────────────────────────────────
+      let icePollAbort = null;
 
-let _batteryPct = '';
-if (navigator.getBattery) {
-  navigator.getBattery().then(b => {
-    _batteryPct = Math.round(b.level * 100);
-    b.onlevelchange = () => { _batteryPct = Math.round(b.level * 100); };
-  });
-}
+      function destroyPC() {
+        if (icePollAbort) icePollAbort.abort();
+        if (pc) {
+          pc.ontrack = null;
+          pc.oniceconnectionstatechange = null;
+          pc.onicecandidate = null;
+          pc.close();
+          pc = null;
+        }
+      }
 
-function sendPing() {
-  const info = getDeviceInfo();
-  const params = new URLSearchParams({
-    latency: lastRTT || '', os: info.os, browser: info.browser,
-    resolution: info.resolution, device: info.device, gpu: info.gpu,
-    battery: _batteryPct
-  });
-  fetch(`/ping?${params}`).catch(() => {});
-}
-setInterval(sendPing, 2000);
-
-// ─── Volume ────────────────────────────────────────────────────
-function setVolume(v) { audioEl.volume = v; video.volume = v; }
-function toggleMute() {
-  const muted = audioEl.muted = video.muted = !audioEl.muted;
-  $('vol-icon').style.opacity = muted ? '0.4' : '1';
-}
-
-// Unmute video on first user interaction (browser autoplay policy)
-let _audioUnmuted = false;
-function unmuteOnInteraction() {
-  if (_audioUnmuted) return;
-  _audioUnmuted = true;
-  video.muted = false;
-  audioEl.muted = false;
-  $('vol-icon').style.opacity = '1';
-}
-document.addEventListener('click', unmuteOnInteraction, { once: true });
-document.addEventListener('keydown', unmuteOnInteraction, { once: true });
-
-// ─── WebRTC ────────────────────────────────────────────────────
-let icePollAbort = null;
-
-function destroyPC() {
-  if (icePollAbort) icePollAbort.abort();
-  if (pc) {
-    pc.ontrack = null;
-    pc.oniceconnectionstatechange = null;
-    pc.onicecandidate = null;
-    pc.close();
-    pc = null;
-  }
-}
-
-function setStatus(state) {
-  dot.className = 'hud-dot ' + state;
-  if (state === 'live') { label.textContent = 'LIVE'; label.style.color = 'var(--green)'; }
-  else if (state === 'reconnecting') { label.textContent = 'RECONNECTING'; label.style.color = 'var(--yellow)'; }
-  else { label.textContent = 'OFFLINE'; label.style.color = 'var(--red)'; }
-}
-
-async function connectWebRTC() {
-  let connectTimeout;
-  try {
-    destroyPC();
-    mode = 'auto';
-    pc = new RTCPeerConnection({ iceServers: [] });
-
-    connectTimeout = setTimeout(() => {
-      if (mode === 'auto') { retryCount = 2; connectMJPEG(); }
-    }, 5000);
-
-    pc.addTransceiver('video', { direction: 'recvonly' });
-    pc.addTransceiver('audio', { direction: 'recvonly' });
-
-    pc.ontrack = (event) => {
-      if (!video.srcObject) video.srcObject = new MediaStream();
-      video.srcObject.addTrack(event.track);
-      video.style.display = 'block';
-      canvas.style.display = 'none';
-      connecting.style.display = 'none';
-      setStatus('live');
-      mode = 'webrtc';
-      audioEl.pause(); audioEl.src = '';
-    };
-
-    pc.oniceconnectionstatechange = () => {
-      const state = pc.iceConnectionState;
-      console.log('ICE state:', state);
-      if (state === 'connected' || state === 'completed') {
-        clearTimeout(connectTimeout);
-        setStatus('live');
-        retryCount = 0;
-      } else if (state === 'failed' || state === 'closed' || state === 'disconnected') {
-        clearTimeout(connectTimeout);
-        setStatus('reconnecting');
-        latencyEl.textContent = '';
-        retryCount++;
-        if (retryCount >= 2) {
-          console.log('WebRTC failed/closed, falling back to MJPEG');
-          connectMJPEG();
+      function setStatus(state) {
+        dot.className = "hud-dot " + state;
+        if (state === "live") {
+          label.textContent = "LIVE";
+          label.style.color = "var(--green)";
+        } else if (state === "reconnecting") {
+          label.textContent = "RECONNECTING";
+          label.style.color = "var(--yellow)";
         } else {
-          setTimeout(connectWebRTC, 2000);
+          label.textContent = "OFFLINE";
+          label.style.color = "var(--red)";
         }
       }
-    };
 
-    pc.onconnectionstatechange = () => {
-      console.log('Connection state:', pc.connectionState);
-      if (pc.connectionState === 'failed' || pc.connectionState === 'closed') {
-        clearTimeout(connectTimeout);
-        retryCount++;
-        if (retryCount >= 2) connectMJPEG();
-        else setTimeout(connectWebRTC, 2000);
-      }
-    };
+      async function connectWebRTC() {
+        let connectTimeout;
+        try {
+          destroyPC();
+          mode = "auto";
+          pc = new RTCPeerConnection({ iceServers: [] });
 
-    pc.onicecandidate = (event) => {
-      if (event.candidate) {
-        fetch('/ice', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ candidate: event.candidate.candidate, sdpMLineIndex: event.candidate.sdpMLineIndex, sdpMid: event.candidate.sdpMid })
-        }).catch(() => {});
-      }
-    };
-
-    const offer = await pc.createOffer();
-    await pc.setLocalDescription(offer);
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000);
-    const response = await fetch('/webrtc/offer', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sdp: pc.localDescription.sdp }),
-      signal: controller.signal
-    });
-    clearTimeout(timeoutId);
-    if (!response.ok) throw new Error(`Server error: ${response.status}`);
-    const data = await response.json();
-    if (data.error) throw new Error(data.error);
-    await pc.setRemoteDescription(new RTCSessionDescription({ type: 'answer', sdp: data.sdp }));
-    pollServerICE();
-  } catch (err) {
-    clearTimeout(connectTimeout);
-    retryCount++;
-    if (retryCount >= 2) connectMJPEG();
-    else setTimeout(connectWebRTC, 2000);
-  }
-}
-
-function pollServerICE() {
-  if (icePollAbort) icePollAbort.abort();
-  icePollAbort = new AbortController();
-  function poll() {
-    if (!pc || mode !== 'auto') return;
-    fetch('/ice/poll', { signal: icePollAbort.signal })
-      .then(r => r.json())
-      .then(data => {
-        if (data.candidates) {
-          for (const c of data.candidates) {
-            if (pc && c.candidate) {
-              pc.addIceCandidate(new RTCIceCandidate({ candidate: c.candidate, sdpMLineIndex: c.sdpMLineIndex, sdpMid: c.sdpMid })).catch(() => {});
+          connectTimeout = setTimeout(() => {
+            if (mode === "auto") {
+              retryCount = 2;
+              connectMJPEG();
             }
-          }
+          }, 5000);
+
+          pc.addTransceiver("video", { direction: "recvonly" });
+          pc.addTransceiver("audio", { direction: "recvonly" });
+
+          pc.ontrack = (event) => {
+            if (!video.srcObject) video.srcObject = new MediaStream();
+            video.srcObject.addTrack(event.track);
+            video.style.display = "block";
+            canvas.style.display = "none";
+            connecting.style.display = "none";
+            setStatus("live");
+            mode = "webrtc";
+            audioEl.pause();
+            audioEl.src = "";
+            // If this is an incoming audio track, prompt user to enable audio.
+            if (event.track && event.track.kind === "audio") {
+              // Show overlay unless user already interacted
+              if (!_audioUnmuted) showAudioOverlay();
+            }
+          };
+
+          pc.oniceconnectionstatechange = () => {
+            const state = pc.iceConnectionState;
+            console.log("ICE state:", state);
+            if (state === "connected" || state === "completed") {
+              clearTimeout(connectTimeout);
+              setStatus("live");
+              retryCount = 0;
+            } else if (
+              state === "failed" ||
+              state === "closed" ||
+              state === "disconnected"
+            ) {
+              clearTimeout(connectTimeout);
+              setStatus("reconnecting");
+              latencyEl.textContent = "";
+              retryCount++;
+              if (retryCount >= 2) {
+                console.log("WebRTC failed/closed, falling back to MJPEG");
+                connectMJPEG();
+              } else {
+                setTimeout(connectWebRTC, 2000);
+              }
+            }
+          };
+
+          pc.onconnectionstatechange = () => {
+            console.log("Connection state:", pc.connectionState);
+            if (
+              pc.connectionState === "failed" ||
+              pc.connectionState === "closed"
+            ) {
+              clearTimeout(connectTimeout);
+              retryCount++;
+              if (retryCount >= 2) connectMJPEG();
+              else setTimeout(connectWebRTC, 2000);
+            }
+          };
+
+          pc.onicecandidate = (event) => {
+            if (event.candidate) {
+              fetch("/ice", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  candidate: event.candidate.candidate,
+                  sdpMLineIndex: event.candidate.sdpMLineIndex,
+                  sdpMid: event.candidate.sdpMid,
+                }),
+              }).catch(() => {});
+            }
+          };
+
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), 10000);
+          const response = await fetch("/webrtc/offer", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sdp: pc.localDescription.sdp }),
+            signal: controller.signal,
+          });
+          clearTimeout(timeoutId);
+          if (!response.ok) throw new Error(`Server error: ${response.status}`);
+          const data = await response.json();
+          if (data.error) throw new Error(data.error);
+          await pc.setRemoteDescription(
+            new RTCSessionDescription({ type: "answer", sdp: data.sdp }),
+          );
+          pollServerICE();
+        } catch (err) {
+          clearTimeout(connectTimeout);
+          retryCount++;
+          if (retryCount >= 2) connectMJPEG();
+          else setTimeout(connectWebRTC, 2000);
         }
-        if (mode === 'auto' || mode === 'webrtc') setTimeout(poll, 100);
-      }).catch(() => {});
-  }
-  poll();
-}
-
-// ─── Mux stream (video+audio in one connection) ────────────────
-let mjpegAbort = null;
-
-function connectMJPEG() {
-  destroyPC();
-  if (mjpegAbort) mjpegAbort.abort();
-  mjpegAbort = new AbortController();
-  mode = 'mjpeg';
-  connecting.style.display = 'none';
-  canvas.style.display = 'block';
-  video.style.display = 'none';
-  setStatus('live');
-  label.textContent = 'LIVE';
-  frameTimestamps = [];
-  mjpegLatencies = [];
-  audioBuf = [];
-  rxLen = 0;
-  audioNextTime = 0;
-  initAudio();
-
-  fetch('/stream', { signal: mjpegAbort.signal }).then(response => {
-    const reader = response.body.getReader();
-    function processChunk({ done, value }) {
-      if (done) return;
-      // Grow buffer if needed (double capacity)
-      if (rxLen + value.length > rxBuf.length) {
-        const grown = new Uint8Array(Math.max(rxBuf.length * 2, rxLen + value.length));
-        grown.set(rxBuf.subarray(0, rxLen));
-        rxBuf = grown;
       }
-      rxBuf.set(value, rxLen);
-      rxLen += value.length;
-      // Parse entries: [type(1)][length(4)][data(N)]
-      let pos = 0;
-      while (pos + 5 <= rxLen) {
-        const type = rxBuf[pos];
-        const length = (rxBuf[pos+1] << 24 | rxBuf[pos+2] << 16 | rxBuf[pos+3] << 8 | rxBuf[pos+4]) >>> 0;
-        if (pos + 5 + length > rxLen) break;
-        if (type === 0x01) renderJPEG(rxBuf, pos + 5, length);
-        else if (type === 0x02) queueAudio(rxBuf, pos + 5, length);
-        pos += 5 + length;
+
+      function pollServerICE() {
+        if (icePollAbort) icePollAbort.abort();
+        icePollAbort = new AbortController();
+        function poll() {
+          if (!pc || mode !== "auto") return;
+          fetch("/ice/poll", { signal: icePollAbort.signal })
+            .then((r) => r.json())
+            .then((data) => {
+              if (data.candidates) {
+                for (const c of data.candidates) {
+                  if (pc && c.candidate) {
+                    pc.addIceCandidate(
+                      new RTCIceCandidate({
+                        candidate: c.candidate,
+                        sdpMLineIndex: c.sdpMLineIndex,
+                        sdpMid: c.sdpMid,
+                      }),
+                    ).catch(() => {});
+                  }
+                }
+              }
+              if (mode === "auto" || mode === "webrtc") setTimeout(poll, 100);
+            })
+            .catch(() => {});
+        }
+        poll();
       }
-      // Compact: shift unparsed data to front (no allocation)
-      if (pos > 0) {
-        rxBuf.copyWithin(0, pos, rxLen);
-        rxLen -= pos;
+
+      // ─── Mux stream (video+audio in one connection) ────────────────
+      let mjpegAbort = null;
+
+      function connectMJPEG() {
+        destroyPC();
+        if (mjpegAbort) mjpegAbort.abort();
+        mjpegAbort = new AbortController();
+        mode = "mjpeg";
+        connecting.style.display = "none";
+        canvas.style.display = "block";
+        video.style.display = "none";
+        setStatus("live");
+        label.textContent = "LIVE";
+        frameTimestamps = [];
+        mjpegLatencies = [];
+        audioBuf = [];
+        rxLen = 0;
+        audioNextTime = 0;
+        initAudio();
+
+        fetch("/stream", { signal: mjpegAbort.signal })
+          .then((response) => {
+            const reader = response.body.getReader();
+            function processChunk({ done, value }) {
+              if (done) return;
+              // Grow buffer if needed (double capacity)
+              if (rxLen + value.length > rxBuf.length) {
+                const grown = new Uint8Array(
+                  Math.max(rxBuf.length * 2, rxLen + value.length),
+                );
+                grown.set(rxBuf.subarray(0, rxLen));
+                rxBuf = grown;
+              }
+              rxBuf.set(value, rxLen);
+              rxLen += value.length;
+              // Parse entries: [type(1)][length(4)][data(N)]
+              let pos = 0;
+              while (pos + 5 <= rxLen) {
+                const type = rxBuf[pos];
+                const length =
+                  ((rxBuf[pos + 1] << 24) |
+                    (rxBuf[pos + 2] << 16) |
+                    (rxBuf[pos + 3] << 8) |
+                    rxBuf[pos + 4]) >>>
+                  0;
+                if (pos + 5 + length > rxLen) break;
+                if (type === 0x01) renderJPEG(rxBuf, pos + 5, length);
+                else if (type === 0x02) queueAudio(rxBuf, pos + 5, length);
+                pos += 5 + length;
+              }
+              // Compact: shift unparsed data to front (no allocation)
+              if (pos > 0) {
+                rxBuf.copyWithin(0, pos, rxLen);
+                rxLen -= pos;
+              }
+              return reader.read().then(processChunk);
+            }
+            return reader.read().then(processChunk);
+          })
+          .catch((err) => {
+            if (err.name !== "AbortError") setTimeout(connectMJPEG, 2000);
+          });
       }
-      return reader.read().then(processChunk);
-    }
-    return reader.read().then(processChunk);
-  }).catch(err => {
-    if (err.name !== 'AbortError') setTimeout(connectMJPEG, 2000);
-  });
-}
 
-// ─── Receiving buffer (grows as needed, no per-read alloc) ─────
-let rxBuf = new Uint8Array(64 * 1024);
-let rxLen = 0;
+      // ─── Receiving buffer (grows as needed, no per-read alloc) ─────
+      let rxBuf = new Uint8Array(64 * 1024);
+      let rxLen = 0;
 
-// ─── Audio playback — Web Audio API for gapless sync ───────────
-let audioBuf = [];
-let audioCtx = null;
-let audioNextTime = 0;
+      // ─── Audio playback — Web Audio API for gapless sync ───────────
+      let audioBuf = [];
+      let audioCtx = null;
+      let audioNextTime = 0;
 
-function queueAudio(data, offset, length) {
-  audioBuf.push(data.slice(offset, offset + length));
-}
+      function queueAudio(data, offset, length) {
+        audioBuf.push(data.slice(offset, offset + length));
+      }
 
-function initAudio() {
-  if (!audioCtx) {
-    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-  }
-  // Resume requires user gesture on mobile — try, handle silently
-  if (audioCtx.state === 'suspended') {
-    audioCtx.resume().catch(() => {});
-  }
-}
+      function initAudio() {
+        if (!audioCtx) {
+          audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        }
+        // Resume requires user gesture on mobile — try, handle silently
+        if (audioCtx.state === "suspended") {
+          audioCtx.resume().catch(() => {});
+        }
+      }
 
-// Ensure AudioContext is resumed on any user interaction (mobile autoplay policy)
-document.addEventListener('click', () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); }, { once: false });
-document.addEventListener('touchstart', () => { if (audioCtx && audioCtx.state === 'suspended') audioCtx.resume(); }, { once: false });
+      // Ensure AudioContext is resumed on any user interaction (mobile autoplay policy)
+      document.addEventListener(
+        "click",
+        () => {
+          if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+        },
+        { once: false },
+      );
+      document.addEventListener(
+        "touchstart",
+        () => {
+          if (audioCtx && audioCtx.state === "suspended") audioCtx.resume();
+        },
+        { once: false },
+      );
 
-function playMuxAudio(mp3Data) {
-  if (!audioCtx) return;
-  const blob = new Blob([mp3Data], { type: 'audio/mpeg' });
-  blob.arrayBuffer().then(buf => {
-    return audioCtx.decodeAudioData(buf);
-  }).then(audioBuffer => {
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
-    // Schedule to play immediately after the previous chunk ends
-    const now = audioCtx.currentTime;
-    if (audioNextTime < now) audioNextTime = now;
-    source.start(audioNextTime);
-    audioNextTime += audioBuffer.duration;
-  }).catch(() => {});
-}
+      function playMuxAudio(mp3Data) {
+        if (!audioCtx) return;
+        const blob = new Blob([mp3Data], { type: "audio/mpeg" });
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            return audioCtx.decodeAudioData(buf);
+          })
+          .then((audioBuffer) => {
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+            // Schedule to play immediately after the previous chunk ends
+            const now = audioCtx.currentTime;
+            if (audioNextTime < now) audioNextTime = now;
+            source.start(audioNextTime);
+            audioNextTime += audioBuffer.duration;
+          })
+          .catch(() => {});
+      }
 
-setInterval(() => {
-  if (audioBuf.length === 0) return;
-  const blob = new Blob(audioBuf, { type: 'audio/mpeg' });
-  audioBuf = [];
-  blob.arrayBuffer().then(buf => {
-    return audioCtx.decodeAudioData(buf);
-  }).then(audioBuffer => {
-    const source = audioCtx.createBufferSource();
-    source.buffer = audioBuffer;
-    source.connect(audioCtx.destination);
-    const now = audioCtx.currentTime;
-    if (audioNextTime < now) audioNextTime = now;
-    source.start(audioNextTime);
-    audioNextTime += audioBuffer.duration;
-  }).catch(() => {});
-}, 100);
+      setInterval(() => {
+        if (audioBuf.length === 0) return;
+        const blob = new Blob(audioBuf, { type: "audio/mpeg" });
+        audioBuf = [];
+        blob
+          .arrayBuffer()
+          .then((buf) => {
+            return audioCtx.decodeAudioData(buf);
+          })
+          .then((audioBuffer) => {
+            const source = audioCtx.createBufferSource();
+            source.buffer = audioBuffer;
+            source.connect(audioCtx.destination);
+            const now = audioCtx.currentTime;
+            if (audioNextTime < now) audioNextTime = now;
+            source.start(audioNextTime);
+            audioNextTime += audioBuffer.duration;
+          })
+          .catch(() => {});
+      }, 100);
 
-// ─── Video rendering — robust mobile-compatible ───────────────
-let _renderGen = 0;
+      // ─── Video rendering — robust mobile-compatible ───────────────
+      let _renderGen = 0;
 
-function renderJPEG(data, offset, length) {
-  const jpegData = data.slice(offset, offset + length);
-  const blob = new Blob([jpegData], { type: 'image/jpeg' });
-  const url = URL.createObjectURL(blob);
-  const gen = ++_renderGen;
-  const img = new Image();
-  img.onload = () => {
-    // Only render if this is still the latest frame
-    if (gen !== _renderGen) { URL.revokeObjectURL(url); return; }
-    if (canvas.width !== img.naturalWidth || canvas.height !== img.naturalHeight) {
-      canvas.width = img.naturalWidth;
-      canvas.height = img.naturalHeight;
-    }
-    canvasCtx.drawImage(img, 0, 0);
-    URL.revokeObjectURL(url);
-    frameTimestamps.push(Date.now());
-  };
-  img.onerror = () => { URL.revokeObjectURL(url); };
-  img.src = url;
-}
+      function renderJPEG(data, offset, length) {
+        const jpegData = data.slice(offset, offset + length);
+        const blob = new Blob([jpegData], { type: "image/jpeg" });
+        const url = URL.createObjectURL(blob);
+        const gen = ++_renderGen;
+        const img = new Image();
+        img.onload = () => {
+          // Only render if this is still the latest frame
+          if (gen !== _renderGen) {
+            URL.revokeObjectURL(url);
+            return;
+          }
+          if (
+            canvas.width !== img.naturalWidth ||
+            canvas.height !== img.naturalHeight
+          ) {
+            canvas.width = img.naturalWidth;
+            canvas.height = img.naturalHeight;
+          }
+          canvasCtx.drawImage(img, 0, 0);
+          URL.revokeObjectURL(url);
+          frameTimestamps.push(Date.now());
+        };
+        img.onerror = () => {
+          URL.revokeObjectURL(url);
+        };
+        img.src = url;
+      }
 
-// ─── Controls ──────────────────────────────────────────────────
-$('btn-sync').addEventListener('click', () => {
-  setStatus('reconnecting');
-  latencyEl.textContent = '';
-  retryCount = 0;
-  if (mjpegAbort) mjpegAbort.abort();
-  if (mode === 'webrtc') connectWebRTC();
-  else connectMJPEG();
-});
-$('btn-refresh').addEventListener('click', () => location.reload());
-$('btn-fullscreen').addEventListener('click', () => {
-  const el = $('video-container');
-  if (!document.fullscreenElement) el.requestFullscreen().catch(() => {});
-  else document.exitFullscreen();
-});
+      // ─── Controls ──────────────────────────────────────────────────
+      $("btn-sync").addEventListener("click", () => {
+        setStatus("reconnecting");
+        latencyEl.textContent = "";
+        retryCount = 0;
+        if (mjpegAbort) mjpegAbort.abort();
+        if (mode === "webrtc") connectWebRTC();
+        else connectMJPEG();
+      });
+      $("btn-refresh").addEventListener("click", () => location.reload());
+      $("btn-fullscreen").addEventListener("click", () => {
+        const el = $("video-container");
+        if (!document.fullscreenElement) el.requestFullscreen().catch(() => {});
+        else document.exitFullscreen();
+      });
 
-// ─── Init ──────────────────────────────────────────────────────
-connectWebRTC();
-</script>
-</body>
+      // ─── Init ──────────────────────────────────────────────────────
+      connectWebRTC();
+    </script>
+  </body>
 </html>
