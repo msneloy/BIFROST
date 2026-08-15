@@ -8,6 +8,12 @@ import (
 	"github.com/nelobster/bifrost/internal/stats"
 )
 
+func (s *Server) handleAdmin(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
+	w.Write(s.adminHTML)
+}
+
 func (s *Server) handleAPIClients(w http.ResponseWriter, r *http.Request) {
 	clients := s.tracker.GetAll()
 	type clientJSON struct {
