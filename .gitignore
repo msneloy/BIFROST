@@ -1,36 +1,20 @@
 # BIFROST Build Artifacts
 bifrost
 bifrost.exe
-bifrost_old
+bin/
+dist/
+tmp/
+coverage.out
 
 # Logs & Diagnostics
 *.log
-*.jpg
-final_*.log
-debug_capture.jpg
-
-# Installer Dependencies (Pre-built)
-libs/
 
 # Go environment
 vendor/
 *.out
 *.test
 
-# Intermediate experiment scripts
-scripts/capture.js
-scripts/capture.py
-scripts/portal_capture.py
-scripts/wayland_capture.py
-
-# Temp files
-*.bin
-*.mjpg
-*.pw
-
 # IDE / Tooling
-.mimocode/
-.mimocode/*
 .idea/
 .vscode/
 *.swp

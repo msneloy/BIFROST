@@ -2,11 +2,15 @@ package webrtc
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"net"
+	"syscall"
+	"time"
 
 	"github.com/pion/rtp"
 	"github.com/pion/webrtc/v4"
+	"golang.org/x/sys/unix"
 )
 
 type RTPReceiver struct {
@@ -14,6 +18,42 @@ type RTPReceiver struct {
 	audioConn  *net.UDPConn
 	videoTrack *webrtc.TrackLocalStaticRTP
 	audioTrack *webrtc.TrackLocalStaticRTP
+}
+
+// listenUDPWithReuse binds a UDP port with SO_REUSEPORT so stale sockets
+// from crashed/killed processes don't block startup.
+func listenUDPWithReuse(port int) (*net.UDPConn, error) {
+	lc := net.ListenConfig{
+		Control: func(network, address string, c syscall.RawConn) error {
+			var opErr error
+			err := c.Control(func(fd uintptr) {
+				opErr = unix.SetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_REUSEPORT, 1)
+			})
+			if err != nil {
+				return err
+			}
+			return opErr
+		},
+	}
+
+	addr := fmt.Sprintf(":%d", port)
+	// Retry a few times in case the old socket is still tearing down.
+	var lastErr error
+	for attempt := 0; attempt < 5; attempt++ {
+		conn, err := lc.ListenPacket(context.Background(), "udp", addr)
+		if err == nil {
+			udpConn, ok := conn.(*net.UDPConn)
+			if !ok {
+				conn.Close()
+				return nil, fmt.Errorf("unexpected conn type %T", conn)
+			}
+			return udpConn, nil
+		}
+		lastErr = err
+		log.Printf("[WebRTC] Port %d not ready, retrying... (%v)", port, err)
+		time.Sleep(500 * time.Millisecond)
+	}
+	return nil, fmt.Errorf("failed to bind UDP port %d after retries: %w", port, lastErr)
 }
 
 func NewRTPReceiver(videoPort, audioPort int) (*RTPReceiver, error) {
@@ -33,14 +73,12 @@ func NewRTPReceiver(videoPort, audioPort int) (*RTPReceiver, error) {
 		return nil, err
 	}
 
-	videoAddr := &net.UDPAddr{Port: videoPort}
-	videoConn, err := net.ListenUDP("udp", videoAddr)
+	videoConn, err := listenUDPWithReuse(videoPort)
 	if err != nil {
 		return nil, err
 	}
 
-	audioAddr := &net.UDPAddr{Port: audioPort}
-	audioConn, err := net.ListenUDP("udp", audioAddr)
+	audioConn, err := listenUDPWithReuse(audioPort)
 	if err != nil {
 		videoConn.Close()
 		return nil, err

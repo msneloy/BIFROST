@@ -2,19 +2,19 @@ package main
 
 import (
 	"context"
-	"fmt"
 	"log"
-	"os/exec"
 	"os/signal"
-	"runtime"
 	"syscall"
 	"time"
+
+	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/nelobster/bifrost/internal/capture"
 	"github.com/nelobster/bifrost/internal/config"
 	"github.com/nelobster/bifrost/internal/mdns"
 	"github.com/nelobster/bifrost/internal/server"
 	"github.com/nelobster/bifrost/internal/tracker"
+	"github.com/nelobster/bifrost/internal/tui"
 	bifrostwebrtc "github.com/nelobster/bifrost/internal/webrtc"
 )
 
@@ -28,9 +28,6 @@ func main() {
 	// Check dependencies
 	cfg.CheckDeps()
 
-	// Show banner
-	showBanner(cfg)
-
 	// Set up signal handling
 	ctx, cancel := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
@@ -38,21 +35,17 @@ func main() {
 	// Initialize subsystems
 	cap := capture.New(cfg)
 	trk := tracker.New()
-	var webrtcMgr *bifrostwebrtc.Manager
 
-	// Start WebRTC RTP receiver if enabled
-	if !cfg.NoWebRTC {
-		rtpRecv, err := bifrostwebrtc.NewRTPReceiver(5004, 5005)
-		if err != nil {
-			log.Printf("[!] Failed to create RTP receiver: %v (WebRTC disabled)", err)
-		} else {
-			rtpRecv.Start(ctx)
-			webrtcMgr = bifrostwebrtc.NewManager()
-			webrtcMgr.SetVideoTrack(rtpRecv.VideoTrack())
-			webrtcMgr.SetAudioTrack(rtpRecv.AudioTrack())
-			log.Println("[+] WebRTC manager initialized")
-		}
+	// Start WebRTC RTP receiver
+	rtpRecv, err := bifrostwebrtc.NewRTPReceiver(5004, 5005)
+	if err != nil {
+		log.Fatalf("[!] Failed to start RTP receiver: %v", err)
 	}
+	rtpRecv.Start(ctx)
+	webrtcMgr := bifrostwebrtc.NewManager()
+	webrtcMgr.SetVideoTrack(rtpRecv.VideoTrack())
+	webrtcMgr.SetAudioTrack(rtpRecv.AudioTrack())
+	log.Println("[+] WebRTC initialized")
 
 	// Start capture
 	if err := cap.Start(ctx); err != nil {
@@ -60,7 +53,7 @@ func main() {
 	}
 
 	// Start HTTP server
-	srv := server.New(ctx, cfg, cap, trk, playerHTML, adminHTML, webrtcMgr)
+	srv := server.New(ctx, cfg, cap, trk, playerHTML, webrtcMgr)
 	go func() {
 		if err := srv.Start(ctx); err != nil {
 			log.Printf("[!] HTTP server error: %v", err)
@@ -85,18 +78,25 @@ func main() {
 		}
 	}()
 
-	// Open admin panel in browser (unless --no-browser flag is set)
-	if !cfg.NoBrowser {
-		adminURL := fmt.Sprintf("http://localhost:%d/admin", cfg.Port)
-		log.Printf("[*] Opening admin panel: %s", adminURL)
-		// Small delay to let the HTTP server bind before opening the browser
-		time.AfterFunc(500*time.Millisecond, func() { openBrowser(adminURL) })
-	} else {
-		log.Printf("[+] Running headless. Admin panel: http://%s:%d/admin", cfg.LocalIP, cfg.Port)
-	}
+	// Build capture controller adapter for TUI
+	captureCtrl := &captureAdapter{cap: cap, ctx: ctx}
 
-	// Wait for shutdown signal
-	<-ctx.Done()
+	if cfg.Headless {
+		log.Printf("[+] BIFROST v%s running in headless mode", config.Version)
+		log.Printf("[+] Students connect to: http://bifrost.local:%d", cfg.Port)
+		log.Printf("[+] Resolution: %s | FPS: %d | Audio: %v", cfg.Resolution, cfg.FPS, !cfg.NoAudio)
+		<-ctx.Done()
+	} else {
+		// TUI mode
+		p := tea.NewProgram(
+			tui.New(cfg, captureCtrl, trk),
+			tea.WithAltScreen(),
+		)
+
+		if _, err := p.Run(); err != nil {
+			log.Fatalf("[!] TUI error: %v", err)
+		}
+	}
 
 	// Graceful shutdown
 	log.Println("[*] Shutting down...")
@@ -107,59 +107,12 @@ func main() {
 	log.Println("[+] BIFROST stopped.")
 }
 
-// openBrowser opens the given URL in the system's default browser.
-func openBrowser(url string) {
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "linux":
-		cmd = exec.Command("xdg-open", url)
-	case "darwin":
-		cmd = exec.Command("open", url)
-	case "windows":
-		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", url)
-	default:
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		log.Printf("[!] Could not open browser: %v", err)
-	}
+// captureAdapter wraps capture.Capture to satisfy the tui.CaptureController interface.
+type captureAdapter struct {
+	cap *capture.Capture
+	ctx context.Context
 }
 
-func showBanner(cfg *config.Config) {
-	fmt.Printf(`
-  ╔══════════════════════════════════════════════════════════════╗
-  ║                                                              ║
-  ║   ██████╗ ██╗████████╗██████╗ ████████╗                     ║
-  ║   ██╔══██╗██║╚══██╔══╝██╔══██╗╚══██╔══╝                     ║
-  ║   ██████╔╝██║   ██║   ██████╔╝   ██║                        ║
-  ║   ██╔══██╗██║   ██║   ██╔══██╗   ██║                        ║
-  ║   ██████╔╝██║   ██║   ██████╔╝   ██║                        ║
-  ║   ╚═════╝ ╚═╝   ╚═╝   ╚═════╝    ╚═╝                        ║
-  ║                                                              ║
-  ║   Browser Integrated Feed for Remote Observation             ║
-  ║              & Screen Transmission                           ║
-  ║                                                              ║
-  ║   v%s (Go)                                              ║
-  ║                                                              ║
-  ╚══════════════════════════════════════════════════════════════╝
-
-  Admin Panel:   http://%s:%d/admin
-  Student URL:   http://bifrost.local:%d/watch (mDNS)
-  Student IP:    http://%s:%d/watch
-  Health:        http://%s:%d/health
-
-  Resolution:    %s
-  FPS:           %d
-  Quality:       %d
-  WebRTC:        %v
-  Audio:         %v
-
-`, config.Version,
-		cfg.LocalIP, cfg.Port,
-		cfg.Port,
-		cfg.LocalIP, cfg.Port,
-		cfg.LocalIP, cfg.Port,
-		cfg.Resolution, cfg.FPS, cfg.Quality,
-		!cfg.NoWebRTC, !cfg.NoAudio,
-	)
-}
+func (a *captureAdapter) IsStreaming() bool { return a.cap.IsStreaming() }
+func (a *captureAdapter) Start() error      { return a.cap.Start(a.ctx) }
+func (a *captureAdapter) Stop()             { a.cap.Stop() }

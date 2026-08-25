@@ -1,0 +1,30 @@
+# Air configuration for BIFROST hot-reload
+# Usage: air --headless
+# Or:    make dev
+
+root = "."
+tmp_dir = "tmp"
+
+[build]
+  bin = "./tmp/bifrost"
+  cmd = "go build -o ./tmp/bifrost ."
+  delay = 500
+  entry_point = "main.go"
+  exclude_dir = ["tmp", "bin", "dist", "vendor", ".git", "web"]
+  exclude_regex = ["_test.go$"]
+  include_ext = ["go", "html"]
+  kill_delay = "2s"
+  send_interrupt = true
+  stop_on_error = true
+
+[log]
+  time = false
+
+[color]
+  build = "yellow"
+  main = "magenta"
+  runner = "green"
+  watcher = "cyan"
+
+[misc]
+  clean_on_exit = true

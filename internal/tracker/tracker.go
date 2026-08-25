@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"os"
 	"strings"
 	"sync"
 	"time"
@@ -15,31 +14,18 @@ type Client struct {
 	Host       string
 	MAC        string
 	Bytes      uint64
-	PrevBytes  uint64
 	LastSeen   time.Time
 	Latency    string
 	OS         string
 	Browser    string
 	Resolution string
 	Device     string
-	GPU        string
-	Battery    string
-	Charging   string
 	Active     bool
-}
-
-type Rejection struct {
-	IP     string `json:"ip"`
-	OS     string `json:"os"`
-	Reason string `json:"reason"`
-	Time   string `json:"time"`
-	UA     string `json:"ua"`
 }
 
 type Tracker struct {
 	mu         sync.RWMutex
 	clients    map[string]*Client
-	rejections []Rejection
 	totalBytes uint64
 	startTime  time.Time
 }
@@ -68,14 +54,13 @@ func (t *Tracker) GetOrCreate(ip string) *Client {
 	}
 	t.clients[ip] = c
 
-	// Async DNS and MAC lookups
 	go t.lookupDNS(ip)
 	go t.lookupMAC(ip)
 
 	return c
 }
 
-func (t *Tracker) UpdateTelemetry(ip, latency, os, browser, resolution, device, gpu, battery string) {
+func (t *Tracker) UpdateTelemetry(ip, latency, osName, browser, resolution, device string) {
 	c := t.GetOrCreate(ip)
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -83,8 +68,8 @@ func (t *Tracker) UpdateTelemetry(ip, latency, os, browser, resolution, device, 
 	if latency != "" {
 		c.Latency = latency
 	}
-	if os != "" {
-		c.OS = os
+	if osName != "" {
+		c.OS = osName
 	}
 	if browser != "" {
 		c.Browser = browser
@@ -94,12 +79,6 @@ func (t *Tracker) UpdateTelemetry(ip, latency, os, browser, resolution, device, 
 	}
 	if device != "" {
 		c.Device = device
-	}
-	if gpu != "" {
-		c.GPU = gpu
-	}
-	if battery != "" {
-		c.Battery = battery
 	}
 	c.LastSeen = time.Now()
 	c.Active = true
@@ -113,23 +92,6 @@ func (t *Tracker) AddBytes(ip string, n uint64) {
 		c.Bytes += n
 	}
 	t.totalBytes += n
-}
-
-func (t *Tracker) LogRejection(ip, os, reason, ua string) {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	r := Rejection{
-		IP:     ip,
-		OS:     os,
-		Reason: reason,
-		Time:   time.Now().Format("15:04:05"),
-		UA:     ua,
-	}
-	t.rejections = append([]Rejection{r}, t.rejections...)
-	if len(t.rejections) > 5 {
-		t.rejections = t.rejections[:5]
-	}
 }
 
 func (t *Tracker) CountActive() int {
@@ -183,48 +145,56 @@ func (t *Tracker) StatsJSON() string {
 		"total_transmitted": fmt.Sprintf("%d bytes", t.totalBytes),
 		"clients":           active,
 		"uptime":            int(time.Since(t.startTime).Seconds()),
-		"rejections":        len(t.rejections),
 	}
 
 	data, _ := json.Marshal(stats)
 	return string(data)
 }
 
-func (t *Tracker) Rejections() []Rejection {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	result := make([]Rejection, len(t.rejections))
-	copy(result, t.rejections)
-	return result
-}
-
 func (t *Tracker) lookupDNS(ip string) {
 	names, err := net.LookupAddr(ip)
-	if err == nil && len(names) > 0 {
-		t.mu.Lock()
-		if c, ok := t.clients[ip]; ok {
-			c.Host = strings.TrimSuffix(names[0], ".")
-		}
-		t.mu.Unlock()
+	if err != nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if c, ok := t.clients[ip]; ok && len(names) > 0 {
+		c.Host = strings.TrimSuffix(names[0], ".")
 	}
 }
 
 func (t *Tracker) lookupMAC(ip string) {
-	data, err := os.ReadFile("/proc/net/arp")
+	ifaces, err := net.Interfaces()
 	if err != nil {
 		return
 	}
-
-	lines := strings.Split(string(data), "\n")
-	for _, line := range lines {
-		fields := strings.Fields(line)
-		if len(fields) >= 4 && fields[0] == ip {
-			t.mu.Lock()
-			if c, ok := t.clients[ip]; ok {
-				c.MAC = fields[3]
+	for _, iface := range ifaces {
+		addrs, err := iface.Addrs()
+		if err != nil {
+			continue
+		}
+		for _, addr := range addrs {
+			if strings.Contains(addr.String(), ip) {
+				t.mu.Lock()
+				if c, ok := t.clients[ip]; ok {
+					c.MAC = iface.HardwareAddr.String()
+				}
+				t.mu.Unlock()
+				return
 			}
-			t.mu.Unlock()
-			return
 		}
 	}
+}
+
+func formatBytes(b uint64) string {
+	const unit = 1024
+	if b < unit {
+		return fmt.Sprintf("%dB", b)
+	}
+	div, exp := uint64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f%cB", float64(b)/float64(div), "KMGTPE"[exp])
 }

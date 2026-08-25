@@ -9,30 +9,24 @@ import (
 	"runtime"
 	"strings"
 	"sync"
+	"time"
 
+	"github.com/godbus/dbus/v5"
 	"github.com/nelobster/bifrost/internal/config"
 )
 
+// Capture manages ffmpeg/gst-launch processes for screen and audio capture.
+// All output goes to RTP (VP8 video + Opus audio) for WebRTC delivery.
 type Capture struct {
-	config     *config.Config
-	videoCmd   *exec.Cmd
-	audioCmd   *exec.Cmd
-	waylandCmd *exec.Cmd
-	splitter   *FrameSplitter
-	muxBuffer  *MuxBuffer
-	streaming  bool
-	mu         sync.Mutex
+	config    *config.Config
+	videoCmd  *exec.Cmd
+	dbusConn  *dbus.Conn // kept alive for Wayland Mutter session
+	streaming bool
+	mu        sync.Mutex
 }
 
 func New(cfg *config.Config) *Capture {
-	return &Capture{
-		config:    cfg,
-		muxBuffer: NewMuxBuffer(30),
-	}
-}
-
-func (c *Capture) MuxBuffer() *MuxBuffer {
-	return c.muxBuffer
+	return &Capture{config: cfg}
 }
 
 func (c *Capture) IsStreaming() bool {
@@ -41,16 +35,18 @@ func (c *Capture) IsStreaming() bool {
 	return c.streaming
 }
 
+// Start begins screen capture. Output is VP8 RTP to UDP 5004 and Opus RTP to
+// UDP 5005, consumed by the WebRTC RTPReceiver.
 func (c *Capture) Start(ctx context.Context) error {
-	sessionType := detectSessionType()
-
-	if sessionType == "wayland" {
+	if detectSessionType() == "wayland" {
 		return c.startWayland(ctx)
 	}
-	return c.startX11Unified(ctx)
+	return c.startX11(ctx)
 }
 
-func (c *Capture) startX11Unified(ctx context.Context) error {
+// startX11 captures the screen via ffmpeg's x11grab and encodes directly to
+// VP8/Opus RTP.
+func (c *Capture) startX11(ctx context.Context) error {
 	display := os.Getenv("DISPLAY")
 	if display == "" {
 		display = ":0"
@@ -72,25 +68,16 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 		args = append(args, "-f", "pulse", "-i", audioSource)
 	}
 
-	// MJPEG to stdout (for HTTP /stream)
+	// VP8 RTP → UDP 5004 (WebRTC video)
 	args = append(args,
 		"-map", "0:v",
-		"-f", "mjpeg", "-q:v", fmt.Sprintf("%d", c.config.Quality),
-		"pipe:1",
+		"-c:v", "libvpx", "-b:v", "2M",
+		"-deadline", "realtime", "-cpu-used", "4",
+		"-f", "rtp", "udp://127.0.0.1:5004",
 	)
 
-	// VP8 RTP for WebRTC video
-	if !c.config.NoWebRTC {
-		args = append(args,
-			"-map", "0:v",
-			"-c:v", "libvpx", "-b:v", "2M",
-			"-deadline", "realtime", "-cpu-used", "4",
-			"-f", "rtp", "udp://127.0.0.1:5004",
-		)
-	}
-
-	// Opus RTP for WebRTC audio
-	if audioSource != "" && !c.config.NoWebRTC {
+	// Opus RTP → UDP 5005 (WebRTC audio)
+	if audioSource != "" {
 		args = append(args,
 			"-map", "1:a",
 			"-c:a", "libopus", "-b:a", "64k",
@@ -98,170 +85,138 @@ func (c *Capture) startX11Unified(ctx context.Context) error {
 		)
 	}
 
-	// MP3 to fd 3 for HTTP audio
-	if audioSource != "" {
-		args = append(args,
-			"-map", "1:a",
-			"-c:a", "libmp3lame", "-b:a", "128k",
-			"-f", "mp3", "pipe:3",
-		)
-	}
-
 	c.videoCmd = exec.CommandContext(ctx, "ffmpeg", args...)
-
-	stdout, err := c.videoCmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("failed to create stdout pipe: %w", err)
-	}
-
-	var audioReader *os.File
-	if audioSource != "" {
-		audioR, audioW, pipeErr := os.Pipe()
-		if pipeErr != nil {
-			return fmt.Errorf("failed to create audio pipe: %w", pipeErr)
-		}
-		audioReader = audioR
-		c.videoCmd.ExtraFiles = []*os.File{audioW}
-	}
-
 	c.videoCmd.Stderr = os.Stderr
 
 	if err := c.videoCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start unified capture: %w", err)
+		return fmt.Errorf("failed to start X11 capture: %w", err)
 	}
 
-	// Frame splitter reads MJPEG from stdout, publishes to MuxBuffer
-	c.splitter = NewFrameSplitter(stdout, c.muxBuffer)
-	go func() {
-		if err := c.splitter.Run(ctx); err != nil && err != context.Canceled {
-			log.Printf("[!] Frame splitter error: %v", err)
-		}
-	}()
-
-	// Audio reader reads MP3 from fd 3, publishes to MuxBuffer
-	if audioReader != nil {
-		go func() {
-			defer audioReader.Close()
-			buf := make([]byte, 8*1024) // 8KB chunks for lower latency
-			for {
-				n, err := audioReader.Read(buf)
-				if n > 0 {
-					chunk := make([]byte, n)
-					copy(chunk, buf[:n])
-					c.muxBuffer.PublishAudio(chunk)
-				}
-				if err != nil {
-					break
-				}
-			}
-		}()
-	}
-
-	log.Printf("[+] Unified capture started (X11: %s, %s @ %dfps, quality %d, audio=%v, webrtc=%v)",
-		display, c.config.Resolution, c.config.FPS, c.config.Quality,
-		audioSource != "", !c.config.NoWebRTC)
-
-	c.mu.Lock()
-	c.streaming = true
-	c.mu.Unlock()
-
+	log.Printf("[+] X11 capture started (%s, %s @ %dfps, audio=%v)",
+		display, c.config.Resolution, c.config.FPS, audioSource != "")
+	c.setStreaming(true)
 	return nil
 }
 
+// startWayland captures the screen on GNOME/Wayland using the Mutter
+// ScreenCast D-Bus API + GStreamer. Single pipeline for video+audio so they
+// share the same GStreamer clock for perfect sync.
 func (c *Capture) startWayland(ctx context.Context) error {
-	scripts := []string{"mutter_capture.py", "portal_capture.py", "capture.py"}
-	exe, _ := os.Executable()
-
-	for _, script := range scripts {
-		scriptPath := findScript(exe, script)
-		if scriptPath == "" {
-			continue
-		}
-
-		cmd := exec.CommandContext(ctx, "python3", scriptPath)
-		if c.config.NoWebRTC {
-			cmd.Args = append(cmd.Args, "--no-webrtc")
-		}
-		stdout, err := cmd.StdoutPipe()
-		if err != nil {
-			continue
-		}
-		cmd.Stderr = os.Stderr
-
-		if err := cmd.Start(); err != nil {
-			log.Printf("[!] Failed to start %s: %v", script, err)
-			continue
-		}
-
-		c.waylandCmd = cmd
-		c.splitter = NewFrameSplitter(stdout, c.muxBuffer)
-		go func() {
-			if err := c.splitter.Run(ctx); err != nil && err != context.Canceled {
-				log.Printf("[!] Frame splitter error: %v", err)
-			}
-		}()
-
-		log.Printf("[+] Wayland capture started via %s", script)
-
-		if !c.config.NoAudio {
-			if source := detectPulseSource(); source != "" {
-				c.startAudioCapture(ctx, source)
-			} else {
-				log.Println("[!] No PulseAudio source found — audio capture disabled")
-			}
-		}
-
-		c.mu.Lock()
-		c.streaming = true
-		c.mu.Unlock()
-
-		return nil
-	}
-
-	return fmt.Errorf("no Wayland capture script found (tried: %v)", scripts)
-}
-
-func (c *Capture) startAudioCapture(ctx context.Context, source string) {
-	audioArgs := []string{
-		"-y", "-loglevel", "warning",
-		"-f", "pulse", "-i", source,
-		"-c:a", "libmp3lame", "-b:a", "128k",
-		"-f", "mp3", "pipe:1",
-	}
-
-	cmd := exec.CommandContext(ctx, "ffmpeg", audioArgs...)
-	stdout, err := cmd.StdoutPipe()
+	conn, nodeID, err := mutterScreenCastNode()
 	if err != nil {
-		log.Printf("[!] Failed to create audio pipe: %v", err)
-		return
+		return fmt.Errorf("Mutter ScreenCast: %w", err)
 	}
-	cmd.Stderr = os.Stderr
+	c.dbusConn = conn
 
-	if err := cmd.Start(); err != nil {
-		log.Printf("[!] Failed to start audio capture: %v", err)
-		return
-	}
+	// Build pipeline matching the original mutter_capture.py exactly.
+	// tee with two branches: VP8→RTP and fakesink (keeps pipeline flowing).
+	pipeline := fmt.Sprintf(
+		"pipewiresrc path=%d ! videoconvert ! videorate ! video/x-raw,framerate=%d/1 ! tee name=t "+
+			"t. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=4 deadline=1 cpu-used=8 ! rtpvp8pay ! udpsink host=127.0.0.1 port=5004 sync=false "+
+			"t. ! queue max-size-buffers=1 leaky=downstream ! fakesink sync=false",
+		nodeID, c.config.FPS,
+	)
 
-	c.audioCmd = cmd
-
-	go func() {
-		buf := make([]byte, 8*1024) // 8KB chunks for lower latency
-		for {
-			n, err := stdout.Read(buf)
-			if n > 0 {
-				chunk := make([]byte, n)
-				copy(chunk, buf[:n])
-				c.muxBuffer.PublishAudio(chunk)
-			}
-			if err != nil {
-				break
-			}
+	if !c.config.NoAudio {
+		source := detectPulseSource()
+		if source != "" {
+			pipeline += fmt.Sprintf(
+				" pulsesrc device=%s ! audioconvert ! opusenc bitrate=64000 audio-type=restricted-lowdelay ! rtpopuspay ! udpsink host=127.0.0.1 port=5005 sync=false",
+				source,
+			)
 		}
-	}()
+	}
 
-	log.Printf("[+] Audio capture started for HTTP clients (source: %s)", source)
+	c.videoCmd = exec.CommandContext(ctx, "gst-launch-1.0", append([]string{"-q"}, strings.Fields(pipeline)...)...)
+	c.videoCmd.Stderr = os.Stderr
+
+	if err := c.videoCmd.Start(); err != nil {
+		return fmt.Errorf("GStreamer: %w", err)
+	}
+
+	log.Printf("[+] Wayland capture started (PipeWire node %d, %dfps)", nodeID, c.config.FPS)
+	c.setStreaming(true)
+	return nil
 }
 
+// mutterScreenCastNode uses the GNOME Mutter ScreenCast D-Bus API to start a
+// screen capture session and returns the D-Bus connection (must be kept alive)
+// and the PipeWire node ID.
+func mutterScreenCastNode() (*dbus.Conn, uint32, error) {
+	conn, err := dbus.ConnectSessionBus()
+	if err != nil {
+		return nil, 0, fmt.Errorf("D-Bus session bus: %w", err)
+	}
+
+	const dest = "org.gnome.Mutter.ScreenCast"
+	root := dbus.ObjectPath("/org/gnome/Mutter/ScreenCast")
+
+	// CreateSession({})
+	var sessionPath dbus.ObjectPath
+	err = conn.Object(dest, root).Call(
+		dest+".CreateSession", 0,
+		map[string]dbus.Variant{},
+	).Store(&sessionPath)
+	if err != nil {
+		conn.Close()
+		return nil, 0, fmt.Errorf("CreateSession: %w", err)
+	}
+
+	// RecordMonitor("", {})
+	var streamPath dbus.ObjectPath
+	err = conn.Object(dest, sessionPath).Call(
+		dest+".Session.RecordMonitor", 0,
+		"", map[string]dbus.Variant{},
+	).Store(&streamPath)
+	if err != nil {
+		conn.Close()
+		return nil, 0, fmt.Errorf("RecordMonitor: %w", err)
+	}
+
+	// Subscribe to PipeWireStreamAdded signal before calling Start
+	rule := fmt.Sprintf("type='signal',interface='%s.Session',member='PipeWireStreamAdded'", dest)
+	conn.BusObject().Call("org.freedesktop.DBus.AddMatch", 0, rule)
+
+	sigChan := make(chan *dbus.Signal, 4)
+	conn.Signal(sigChan)
+	defer conn.RemoveSignal(sigChan)
+
+	// Start()
+	err = conn.Object(dest, sessionPath).Call(
+		dest+".Session.Start", 0,
+	).Store()
+	if err != nil {
+		conn.Close()
+		return nil, 0, fmt.Errorf("Start: %w", err)
+	}
+
+	// Wait for PipeWireStreamAdded signal (contains the node ID)
+	select {
+	case sig := <-sigChan:
+		if len(sig.Body) < 1 {
+			conn.Close()
+			return nil, 0, fmt.Errorf("PipeWireStreamAdded signal had no body")
+		}
+		nodeID, ok := sig.Body[0].(uint32)
+		if !ok {
+			conn.Close()
+			return nil, 0, fmt.Errorf("PipeWireStreamAdded body[0] is %T, not uint32", sig.Body[0])
+		}
+		log.Printf("[capture] Mutter PipeWire stream added: node %d", nodeID)
+		return conn, nodeID, nil
+	case <-time.After(10 * time.Second):
+		conn.Close()
+		return nil, 0, fmt.Errorf("timeout waiting for PipeWireStreamAdded signal")
+	}
+}
+
+func (c *Capture) setStreaming(v bool) {
+	c.mu.Lock()
+	c.streaming = v
+	c.mu.Unlock()
+}
+
+// Stop kills all capture processes.
 func (c *Capture) Stop() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -270,13 +225,9 @@ func (c *Capture) Stop() {
 		c.videoCmd.Process.Kill()
 		c.videoCmd.Wait()
 	}
-	if c.audioCmd != nil && c.audioCmd.Process != nil {
-		c.audioCmd.Process.Kill()
-		c.audioCmd.Wait()
-	}
-	if c.waylandCmd != nil && c.waylandCmd.Process != nil {
-		c.waylandCmd.Process.Kill()
-		c.waylandCmd.Wait()
+	if c.dbusConn != nil {
+		c.dbusConn.Close()
+		c.dbusConn = nil
 	}
 	c.streaming = false
 	log.Println("[+] Capture stopped")
@@ -297,9 +248,8 @@ func detectPulseSource() string {
 	if err != nil {
 		return ""
 	}
-	lines := strings.Split(string(out), "\n")
 	var fallback string
-	for _, line := range lines {
+	for _, line := range strings.Split(string(out), "\n") {
 		fields := strings.Fields(line)
 		if len(fields) < 2 {
 			continue
@@ -315,23 +265,4 @@ func detectPulseSource() string {
 		}
 	}
 	return fallback
-}
-
-func findScript(exePath, scriptName string) string {
-	dir := exePath
-	for i := 0; i < 5; i++ {
-		idx := strings.LastIndex(dir, "/")
-		if idx < 0 {
-			break
-		}
-		dir = dir[:idx]
-		candidate := dir + "/scripts/" + scriptName
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
-		}
-	}
-	if _, err := os.Stat("scripts/" + scriptName); err == nil {
-		return "scripts/" + scriptName
-	}
-	return ""
 }

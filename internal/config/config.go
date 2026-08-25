@@ -15,11 +15,9 @@ const Version = "0.3.0"
 type Config struct {
 	Port       int
 	FPS        int
-	Quality    int
 	Resolution string
-	NoBrowser  bool
 	NoAudio    bool
-	NoWebRTC   bool
+	Headless   bool
 
 	// Derived
 	LocalIP string
@@ -32,22 +30,20 @@ func Parse() *Config {
 
 	flag.IntVar(&cfg.Port, "port", envInt("BIFROST_PORT", 8080), "HTTP server port")
 	flag.IntVar(&cfg.FPS, "fps", envInt("BIFROST_FPS", 30), "Capture frame rate")
-	flag.IntVar(&cfg.Quality, "quality", envInt("BIFROST_QUALITY", 40), "JPEG quality 1-100")
 	flag.StringVar(&cfg.Resolution, "resolution", envStr("BIFROST_RESOLUTION", "1920x1080"), "Capture resolution WxH")
-	flag.BoolVar(&cfg.NoBrowser, "no-browser", false, "Do not auto-open admin panel in browser on startup")
 	flag.BoolVar(&cfg.NoAudio, "no-audio", false, "Disable audio capture")
-	flag.BoolVar(&cfg.NoWebRTC, "no-webrtc", false, "Disable WebRTC (MJPEG only)")
+	flag.BoolVar(&cfg.Headless, "headless", false, "Run without TUI (for scripts/CI)")
 
 	flag.Usage = func() {
 		fmt.Fprintf(os.Stderr, "BIFROST v%s — Browser Integrated Feed for Remote Observation & Screen Transmission\n\n", Version)
 		fmt.Fprintf(os.Stderr, "Usage: bifrost [OPTIONS]\n\nOptions:\n")
 		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nDependencies:\n  Required: ffmpeg\n  Optional: avahi-daemon + avahi-utils (mDNS), python3 + GStreamer (Wayland)\n")
+		fmt.Fprintf(os.Stderr, "\nDependencies:\n  Required: ffmpeg (X11) or gstreamer (Wayland)\n  Optional: avahi-daemon + avahi-utils (mDNS)\n")
+		fmt.Fprintf(os.Stderr, "\nThe TUI starts automatically. Press 'q' to quit, 's' to start/stop stream.\n")
 	}
 
 	flag.Parse()
 
-	// Parse resolution into width/height
 	w, h := parseResolution(cfg.Resolution)
 	cfg.Width = w
 	cfg.Height = h
@@ -61,8 +57,7 @@ func (c *Config) DetectLocalIP() string {
 		return "127.0.0.1"
 	}
 	defer conn.Close()
-	localAddr := conn.LocalAddr().(*net.UDPAddr)
-	return localAddr.IP.String()
+	return conn.LocalAddr().(*net.UDPAddr).IP.String()
 }
 
 func (c *Config) CheckDeps() {
