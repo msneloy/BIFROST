@@ -373,7 +373,19 @@ const playerHTML = `
               statusText.textContent = "Waiting for stream to start...";
             }
           })
-          .catch(() => {});
+          .catch(() => {
+            // Server is down — schedule reconnect if we haven't already
+            if (gotTrack || streamActive) {
+              console.log("Server unreachable, scheduling reconnect...");
+              gotTrack = false;
+              streamActive = false;
+              setStatus("offline");
+              connecting.style.display = "flex";
+              statusText.textContent = "Server unreachable. Reconnecting...";
+              video.style.display = "none";
+            }
+            doReconnect();
+          });
       }
       setInterval(checkHealth, 2000);
 
@@ -430,6 +442,11 @@ const playerHTML = `
           pc.oniceconnectionstatechange = null;
           pc.close();
           pc = null;
+        }
+        // Clear stale video stream so ontrack starts fresh
+        if (video.srcObject) {
+          video.srcObject.getTracks().forEach(function(t) { t.stop(); });
+          video.srcObject = null;
         }
       }
 
