@@ -17,23 +17,21 @@ import (
 )
 
 type Server struct {
-	config     *config.Config
-	httpSrv    *http.Server
-	capture    *capture.Capture
-	tracker    *tracker.Tracker
-	playerHTML []byte
-	webrtcMgr  *bifrostwebrtc.Manager
-	ctx        context.Context
+	config    *config.Config
+	httpSrv   *http.Server
+	capture   *capture.Capture
+	tracker   *tracker.Tracker
+	webrtcMgr *bifrostwebrtc.Manager
+	ctx       context.Context
 }
 
-func New(ctx context.Context, cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker, playerHTML []byte, webrtcMgr *bifrostwebrtc.Manager) *Server {
+func New(ctx context.Context, cfg *config.Config, cap *capture.Capture, trk *tracker.Tracker, webrtcMgr *bifrostwebrtc.Manager) *Server {
 	return &Server{
-		config:     cfg,
-		capture:    cap,
-		tracker:    trk,
-		playerHTML: playerHTML,
-		webrtcMgr:  webrtcMgr,
-		ctx:        ctx,
+		config:    cfg,
+		capture:   cap,
+		tracker:   trk,
+		webrtcMgr: webrtcMgr,
+		ctx:       ctx,
 	}
 }
 
@@ -81,7 +79,7 @@ func (s *Server) Stop(ctx context.Context) error {
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "no-cache, no-store, must-revalidate")
-	w.Write(s.playerHTML)
+	w.Write([]byte(playerHTML))
 }
 
 func (s *Server) handlePing(w http.ResponseWriter, r *http.Request) {

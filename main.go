@@ -53,7 +53,7 @@ func main() {
 	}
 
 	// Start HTTP server
-	srv := server.New(ctx, cfg, cap, trk, playerHTML, webrtcMgr)
+	srv := server.New(ctx, cfg, cap, trk, webrtcMgr)
 	go func() {
 		if err := srv.Start(ctx); err != nil {
 			log.Printf("[!] HTTP server error: %v", err)

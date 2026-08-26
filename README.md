@@ -12,12 +12,13 @@ BIFROST is a zero-configuration, lightweight **classroom screen broadcasting ser
 
 ## Features
 
-- **Single Binary** — ~16MB pure-Go binary. Just download and run.
+- **Single Binary** — ~18MB static Go binary. Download and run.
 - **Terminal Dashboard (TUI)** — bashtop-inspired interface showing system stats, connected clients, and stream status.
 - **Synchronized WebRTC Audio/Video** — Low-latency VP8 video + Opus audio for synchronized classroom playback.
 - **mDNS Network Registration** — Automatic LAN broadcast at `http://bifrost.local`.
-- **Student View** — Browser-based viewer with WebRTC connection, volume control, and live metrics.
+- **Student View** — Browser-based viewer with WebRTC connection, live metrics, and auto-reconnect.
 - **System Telemetry** — Real-time CPU, memory, disk, network, GPU, and battery monitoring.
+- **Pure Go Codebase** — No HTML, Python, or JavaScript files. Everything is Go.
 
 ---
 
@@ -34,9 +35,15 @@ chmod +x bifrost-linux-amd64
 
 ### Prerequisites
 
-- **ffmpeg** — `sudo apt install ffmpeg`
-- **PulseAudio / PipeWire** — For system audio capture
-- **avahi-utils** (optional) — For mDNS discovery (`bifrost.local`)
+- **GStreamer** — Screen capture backend (pre-installed on GNOME)
+  ```bash
+  sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good
+  ```
+- **avahi-utils** — mDNS for `bifrost.local` discovery (pre-installed on GNOME)
+  ```bash
+  sudo apt install avahi-daemon avahi-utils
+  ```
+- **PulseAudio / PipeWire** — System audio capture (usually pre-installed)
 
 ### Build from Source
 
@@ -78,18 +85,15 @@ Options:
 ```
 bifrost (single Go binary)
 ├── main.go                 Entry point & orchestration
-├── embed_assets.go         go:embed for web assets
 ├── internal/
 │   ├── config/             CLI flags & config parsing
-│   ├── capture/            Screen capture (X11 via ffmpeg, Wayland via GStreamer)
-│   ├── server/             HTTP server, WebRTC signaling
+│   ├── capture/            Screen capture (GStreamer: ximagesrc + pipewiresrc)
+│   ├── server/             HTTP server, WebRTC signaling, player page
 │   ├── webrtc/             Pion WebRTC peer management (VP8 + Opus)
 │   ├── tracker/            Client telemetry & bandwidth monitoring
 │   ├── stats/              System metrics from /proc and /sys
 │   ├── tui/                Terminal dashboard (bubbletea + lipgloss)
 │   └── mdns/               mDNS registration via avahi-publish
-└── web/
-    └── player.html         Student WebRTC viewer
 ```
 
 ---
@@ -110,7 +114,7 @@ bifrost (single Go binary)
 ## Development
 
 ```bash
-make build       # Compile binary
+make build       # Compile static binary
 make test        # Run all tests
 make lint        # Run go vet
 make run         # Build & run in headless mode

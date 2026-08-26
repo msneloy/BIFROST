@@ -44,56 +44,40 @@ func (c *Capture) Start(ctx context.Context) error {
 	return c.startX11(ctx)
 }
 
-// startX11 captures the screen via ffmpeg's x11grab and encodes directly to
-// VP8/Opus RTP.
+// startX11 captures the screen via GStreamer's ximagesrc and encodes directly
+// to VP8/Opus RTP — same pipeline approach as Wayland, no ffmpeg needed.
 func (c *Capture) startX11(ctx context.Context) error {
 	display := os.Getenv("DISPLAY")
 	if display == "" {
 		display = ":0"
 	}
 
-	args := []string{
-		"-y", "-loglevel", "warning",
-		"-f", "x11grab", "-draw_mouse", "1",
-		"-video_size", c.config.Resolution,
-		"-framerate", fmt.Sprintf("%d", c.config.FPS),
-		"-i", display,
-	}
-
-	audioSource := ""
-	if !c.config.NoAudio {
-		audioSource = detectPulseSource()
-	}
-	if audioSource != "" {
-		args = append(args, "-f", "pulse", "-i", audioSource)
-	}
-
-	// VP8 RTP → UDP 5004 (WebRTC video)
-	args = append(args,
-		"-map", "0:v",
-		"-c:v", "libvpx", "-b:v", "2M",
-		"-deadline", "realtime", "-cpu-used", "4",
-		"-f", "rtp", "udp://127.0.0.1:5004",
+	// Build GStreamer pipeline: ximagesrc → VP8 RTP + fakesink (same as Wayland)
+	pipeline := fmt.Sprintf(
+		"ximagesrc display-name=%s ! videoconvert ! videorate ! video/x-raw,framerate=%d/1 ! tee name=t "+
+			"t. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=4 deadline=1 cpu-used=8 ! rtpvp8pay ! udpsink host=127.0.0.1 port=5004 sync=false "+
+			"t. ! queue max-size-buffers=1 leaky=downstream ! fakesink sync=false",
+		display, c.config.FPS,
 	)
 
-	// Opus RTP → UDP 5005 (WebRTC audio)
-	if audioSource != "" {
-		args = append(args,
-			"-map", "1:a",
-			"-c:a", "libopus", "-b:a", "64k",
-			"-f", "rtp", "udp://127.0.0.1:5005",
-		)
+	if !c.config.NoAudio {
+		source := detectPulseSource()
+		if source != "" {
+			pipeline += fmt.Sprintf(
+				" pulsesrc device=%s ! audioconvert ! opusenc bitrate=64000 audio-type=restricted-lowdelay ! rtpopuspay ! udpsink host=127.0.0.1 port=5005 sync=false",
+				source,
+			)
+		}
 	}
 
-	c.videoCmd = exec.CommandContext(ctx, "ffmpeg", args...)
+	c.videoCmd = exec.CommandContext(ctx, "gst-launch-1.0", append([]string{"-q"}, strings.Fields(pipeline)...)...)
 	c.videoCmd.Stderr = os.Stderr
 
 	if err := c.videoCmd.Start(); err != nil {
-		return fmt.Errorf("failed to start X11 capture: %w", err)
+		return fmt.Errorf("GStreamer X11: %w", err)
 	}
 
-	log.Printf("[+] X11 capture started (%s, %s @ %dfps, audio=%v)",
-		display, c.config.Resolution, c.config.FPS, audioSource != "")
+	log.Printf("[+] X11 capture started (%s, %s @ %dfps)", display, c.config.Resolution, c.config.FPS)
 	c.setStreaming(true)
 	return nil
 }

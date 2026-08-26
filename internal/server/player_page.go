@@ -1,3 +1,8 @@
+package server
+
+// playerHTML is the student-facing WebRTC viewer page.
+// Embedded as a Go raw string — no separate files needed.
+const playerHTML = `
 <!doctype html>
 <html lang="en">
   <head>
@@ -329,7 +334,7 @@
           os,
           browser,
           device,
-          resolution: `${screen.width}x${screen.height}`,
+          resolution: screen.width + "x" + screen.height,
         };
       }
       function sendPing() {
@@ -341,7 +346,7 @@
           resolution: info.resolution,
           device: info.device,
         });
-        fetch(`/ping?${p}`).catch(() => {});
+        fetch("/ping?" + p).catch(function() {});
       }
       setInterval(sendPing, 3000);
 
@@ -505,7 +510,7 @@
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ sdp: pc.localDescription.sdp }),
           });
-          if (!resp.ok) throw new Error(`Server error ${resp.status}`);
+          if (!resp.ok) throw new Error("Server error " + resp.status);
           const data = await resp.json();
           if (data.error) throw new Error(data.error);
 
@@ -554,3 +559,4 @@
     </script>
   </body>
 </html>
+`

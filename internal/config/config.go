@@ -38,7 +38,7 @@ func Parse() *Config {
 		fmt.Fprintf(os.Stderr, "BIFROST v%s — Browser Integrated Feed for Remote Observation & Screen Transmission\n\n", Version)
 		fmt.Fprintf(os.Stderr, "Usage: bifrost [OPTIONS]\n\nOptions:\n")
 		flag.PrintDefaults()
-		fmt.Fprintf(os.Stderr, "\nDependencies:\n  Required: ffmpeg (X11) or gstreamer (Wayland)\n  Optional: avahi-daemon + avahi-utils (mDNS)\n")
+		fmt.Fprintf(os.Stderr, "\nDependencies:\n  Required: gstreamer1.0-tools + plugins\n")
 		fmt.Fprintf(os.Stderr, "\nThe TUI starts automatically. Press 'q' to quit, 's' to start/stop stream.\n")
 	}
 
@@ -61,13 +61,10 @@ func (c *Config) DetectLocalIP() string {
 }
 
 func (c *Config) CheckDeps() {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		fmt.Fprintln(os.Stderr, "ERROR: ffmpeg is required but not found in PATH")
-		fmt.Fprintln(os.Stderr, "  Install: apt install ffmpeg")
+	if _, err := exec.LookPath("gst-launch-1.0"); err != nil {
+		fmt.Fprintln(os.Stderr, "ERROR: GStreamer is required but not found in PATH")
+		fmt.Fprintln(os.Stderr, "  Install: sudo apt install gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good")
 		os.Exit(1)
-	}
-	if _, err := exec.LookPath("avahi-publish"); err != nil {
-		fmt.Println("[!] avahi-publish not found — mDNS discovery disabled (install avahi-utils)")
 	}
 }
 

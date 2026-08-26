@@ -10,9 +10,9 @@ GOFLAGS := -trimpath
 
 all: build
 
-## build: Compile the binary
+## build: Compile the binary (static, no CGO)
 build:
-	go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
+	CGO_ENABLED=0 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
 
 ## test: Run all tests
 test:
@@ -44,10 +44,10 @@ run: build
 dev:
 	$(shell go env GOPATH)/bin/air -- --headless
 
-## release: Build release binaries for Linux amd64/arm64
+## release: Build release binaries for Linux amd64/arm64 (static)
 release:
-	GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-amd64 .
-	GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-arm64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-amd64 .
+	CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $(GOFLAGS) -ldflags "$(LDFLAGS)" -o dist/$(BINARY)-linux-arm64 .
 
 ## help: Show this help
 help:

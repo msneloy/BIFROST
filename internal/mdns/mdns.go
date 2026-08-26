@@ -6,6 +6,9 @@ import (
 	"os/exec"
 )
 
+// Register announces the service via mDNS so students can reach
+// bifrost.local without knowing the IP. Uses avahi-publish which is
+// pre-installed on GNOME desktops.
 func Register(ctx context.Context, ip, hostname string) (cleanup func()) {
 	cmd := exec.CommandContext(ctx, "avahi-publish", "-a", "-R", hostname+".local", ip)
 	cmd.Stdout = nil
