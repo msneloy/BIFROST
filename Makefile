@@ -40,9 +40,9 @@ install:
 run: build
 	./bin/$(BINARY) --headless
 
-## dev: Run with hot-reload (auto-restarts on code changes)
+## dev: Run with hot-reload and TUI (auto-restarts on code changes)
 dev:
-	$(shell go env GOPATH)/bin/air -- --headless
+	$(shell go env GOPATH)/bin/air
 
 ## release: Build release binaries for Linux amd64/arm64 (static)
 release:

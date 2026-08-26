@@ -121,13 +121,10 @@ func (r *RTPReceiver) readLoop(ctx context.Context, conn *net.UDPConn, track *we
 		}
 
 		pktCount++
-		if pktCount <= 3 || pktCount%500 == 0 {
-			log.Printf("[WebRTC] RTP %s packet #%d: seq=%d ts=%d size=%d", name, pktCount, packet.SequenceNumber, packet.Timestamp, n)
-		}
-
+		// Only log errors — normal packet flow pollutes the TUI
 		if err := track.WriteRTP(packet); err != nil {
-			if pktCount <= 10 || pktCount%100 == 0 {
-				log.Printf("[WebRTC] RTP %s WriteRTP error (#%d): %v", name, pktCount, err)
+			if pktCount <= 3 {
+				log.Printf("[WebRTC] RTP %s WriteRTP error: %v", name, err)
 			}
 			continue
 		}

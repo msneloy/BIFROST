@@ -87,11 +87,13 @@ func main() {
 		log.Printf("[+] Resolution: %s | FPS: %d | Audio: %v", cfg.Resolution, cfg.FPS, !cfg.NoAudio)
 		<-ctx.Done()
 	} else {
-		// TUI mode
+		// TUI mode — redirect logs into the TUI
+		logWriter := tui.NewLogWriter()
 		p := tea.NewProgram(
 			tui.New(cfg, captureCtrl, trk),
 			tea.WithAltScreen(),
 		)
+		logWriter.SetProgram(p)
 
 		if _, err := p.Run(); err != nil {
 			log.Fatalf("[!] TUI error: %v", err)

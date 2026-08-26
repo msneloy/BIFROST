@@ -4,7 +4,9 @@ package tui
 
 import (
 	"fmt"
+	"log"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -16,6 +18,60 @@ import (
 	"github.com/nelobster/bifrost/internal/stats"
 	"github.com/nelobster/bifrost/internal/tracker"
 )
+
+const maxLogLines = 5
+
+// --- Log writer that feeds into bubbletea ---
+
+// LogWriter is an io.Writer that sends log lines as tea.Msg to a bubbletea program.
+type LogWriter struct {
+	mu  sync.Mutex
+	p   *tea.Program
+	buf []byte
+}
+
+// SetProgram attaches the bubbletea program after it's created.
+func (lw *LogWriter) SetProgram(p *tea.Program) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	lw.p = p
+}
+
+func (lw *LogWriter) Write(p []byte) (n int, err error) {
+	lw.mu.Lock()
+	defer lw.mu.Unlock()
+	// Accumulate until we have a full line
+	lw.buf = append(lw.buf, p...)
+	for {
+		idx := indexOf(lw.buf, '\n')
+		if idx < 0 {
+			break
+		}
+		line := string(lw.buf[:idx])
+		lw.buf = lw.buf[idx+1:]
+		if lw.p != nil {
+			lw.p.Send(logMsg(line))
+		}
+	}
+	return len(p), nil
+}
+
+func indexOf(b []byte, c byte) int {
+	for i, v := range b {
+		if v == c {
+			return i
+		}
+	}
+	return -1
+}
+
+// NewLogWriter creates a LogWriter and sets it as the global log output.
+func NewLogWriter() *LogWriter {
+	lw := &LogWriter{}
+	log.SetOutput(lw)
+	log.SetFlags(log.Ldate | log.Ltime)
+	return lw
+}
 
 // ClientProvider is the interface the TUI needs to query connected clients.
 type ClientProvider interface {
@@ -33,6 +89,7 @@ type CaptureController interface {
 // --- Messages ---
 
 type tickMsg time.Time
+type logMsg string
 
 // --- Key bindings ---
 
@@ -78,6 +135,7 @@ type Model struct {
 	sysStats  *stats.SystemStats
 	clients   []*tracker.Client
 	streaming bool
+	logLines  []string
 }
 
 // New creates a new TUI model.
@@ -141,6 +199,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.clients = m.tracker.GetAll()
 		m.streaming = m.capture.IsStreaming()
 		return m, tickCmd()
+
+	case logMsg:
+		m.logLines = append(m.logLines, string(msg))
+		if len(m.logLines) > maxLogLines {
+			m.logLines = m.logLines[len(m.logLines)-maxLogLines:]
+		}
+		return m, nil
 	}
 
 	var cmd tea.Cmd
@@ -182,6 +247,10 @@ func (m Model) View() string {
 
 	// Clients table
 	b.WriteString(m.renderClients())
+	b.WriteString("\n")
+
+	// Log panel
+	b.WriteString(m.renderLogs())
 	b.WriteString("\n")
 
 	// Footer
@@ -323,6 +392,23 @@ func (m Model) renderClients() string {
 			formatBytes(c.Bytes),
 		)
 		content.WriteString(TableCellStyle.Width(m.width-8).Render(row) + "\n")
+	}
+
+	return PanelBorderStyle.Width(m.width - 4).Render(content.String())
+}
+
+// --- Log panel ---
+
+func (m Model) renderLogs() string {
+	var content strings.Builder
+	content.WriteString(PanelTitleStyle.Render("  LOG") + "\n")
+
+	if len(m.logLines) == 0 {
+		content.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextDim).Render("No log messages"))
+	} else {
+		for _, line := range m.logLines {
+			content.WriteString("  " + lipgloss.NewStyle().Foreground(ColorTextDim).Render(truncate(line, m.width-8)) + "\n")
+		}
 	}
 
 	return PanelBorderStyle.Width(m.width - 4).Render(content.String())
