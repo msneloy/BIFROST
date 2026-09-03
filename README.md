@@ -5,6 +5,8 @@
 [![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/nelobster/BIFROST)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org/)
+[![Go LOC](https://img.shields.io/badge/Go_LOC-3233-blue)](#codebase-structure--line-metrics)
+[![Total LOC](https://img.shields.io/badge/Total_LOC-3661-orange)](#codebase-structure--line-metrics)
 
 BIFROST is a zero-configuration, lightweight **classroom screen broadcasting server** written in Go. It streams a presenter's desktop (video + system audio) directly to student web browsers over a local network (LAN) using low-latency WebRTC (VP8 + Opus).
 
@@ -21,6 +23,70 @@ No heavy client applications, browser extensions, or cloud dependencies are requ
 - **Zero-Install Viewer**: Pure HTML5/JS frontend embedded in the Go binary; viewers open `http://bifrost.local:8080`.
 - **Fault-Tolerant Capture**: Automatic PipeWire node readiness polling and watchdog auto-retry loop for continuous screen capture stability.
 - **Cross-Desktop Support**: Native support for Wayland (GNOME / Mutter ScreenCast D-Bus API) and X11.
+
+---
+
+## Codebase Structure & Line Metrics
+
+### 📂 Directory & File Tree
+
+```text
+BIFROST/
+├── .air.toml               # Air configuration for live-reloading during development
+├── Makefile                # Build automation, testing, linting, release, & auto-LOC scripts
+├── README.md               # Comprehensive project documentation & architecture guide
+├── go.mod                  # Go module definition and dependencies (Pion WebRTC, Lipgloss, Bubbletea)
+├── go.sum                  # Cryptographic checksums for Go dependencies
+├── main.go                 # Application entry point, CLI orchestration, & auto-retry capture loop
+└── internal/               # Core application packages
+    ├── capture/            # Screen & audio capture management
+    │   └── capture.go      # PipeWire readiness polling, Mutter D-Bus API, separate GStreamer processes
+    ├── config/             # Configuration management
+    │   ├── config.go       # Command-line flags parsing & default configuration settings
+    │   └── config_test.go  # Unit tests for CLI flag parsing and defaults
+    ├── mdns/               # Local network discovery
+    │   └── mdns.go         # mDNS registration via avahi-publish for bifrost.local
+    ├── server/             # HTTP server & web UI
+    │   ├── player_page.go  # Embedded HTML5/JS WebRTC player page with click-to-unmute audio
+    │   └── server.go       # HTTP routes, WebRTC SDP offer/answer handlers, ICE candidate polling
+    ├── stats/              # System telemetry collection
+    │   └── stats.go        # Linux /proc and /sys parser (CPU, RAM, Disk, GPU, Swap, Fan, Temp, Load)
+    ├── tracker/            # Client state tracking
+    │   ├── tracker.go      # Connected client tracking, bandwidth metrics, active sessions
+    │   └── tracker_test.go # Unit tests for client connection tracking and timeout eviction
+    ├── tui/                # Terminal User Interface
+    │   ├── styles.go       # Color palette, Lipgloss styles, borders, and bar formatting
+    │   └── tui.go          # Bubbletea dashboard (HUD, telemetry, client list, log feed)
+    └── webrtc/             # WebRTC media streaming
+        ├── manager.go      # Pion WebRTC PeerConnection manager (VP8/Opus tracks, ICE handling)
+        └── rtp_receiver.go # Loopback UDP socket listener (:5004/:5005) & atomic packet counters
+```
+
+### 📊 Codebase Metrics
+
+> [!NOTE]
+> **Automatic Update**: Metrics below and badges at the top update automatically whenever `make loc`, `make build`, or `make release` is executed.
+
+- **Go Codebase**: 3233 lines
+- **Total Repository**: 3661 lines
+
+| Package / Module | File Path | Description | Lines of Code |
+| ---------------- | --------- | ----------- | ------------- |
+| **Main** | `main.go` | Entry point, CLI flags, capture loop, OS signal handling | 120 |
+| **Capture** | `internal/capture/capture.go` | Wayland/Mutter D-Bus, PipeWire polling, GStreamer audio/video | 310 |
+| **Config** | `internal/config/config.go` | CLI flag parser & runtime configuration struct | 98 |
+| **Config Tests** | `internal/config/config_test.go` | Unit tests for configuration defaults and flags | 76 |
+| **mDNS** | `internal/mdns/mdns.go` | Avahi mDNS publication for `bifrost.local` | 30 |
+| **Server** | `internal/server/server.go` | HTTP routes, WebRTC SDP negotiation, ICE polling | 188 |
+| **Player Page** | `internal/server/player_page.go` | Embedded HTML5/JS viewer, WebRTC client, click-to-unmute | 633 |
+| **Stats** | `internal/stats/stats.go` | `/proc` & `/sys` parser for hardware telemetry | 391 |
+| **Tracker** | `internal/tracker/tracker.go` | Client connection tracker & bandwidth estimator | 200 |
+| **Tracker Tests** | `internal/tracker/tracker_test.go` | Unit tests for client session eviction & state | 152 |
+| **TUI Styles** | `internal/tui/styles.go` | Lipgloss color palette, borders, & HUD styles | 94 |
+| **TUI View** | `internal/tui/tui.go` | Bubbletea terminal dashboard & event loops | 604 |
+| **WebRTC Manager**| `internal/webrtc/manager.go` | Pion PeerConnection management & track routing | 171 |
+| **RTP Receiver** | `internal/webrtc/rtp_receiver.go` | UDP `:5004`/`:5005` socket listener & atomic packet counters | 166 |
+| **Build & Dev** | `Makefile`, `.air.toml` | Build automation, live reload, release packaging, LOC script | 84 |
 
 ---
 
@@ -247,13 +313,14 @@ pw-cli info 0
 ## Developer Guide
 
 ```bash
-make build       # Build production binary to ./bin/bifrost
+make build       # Build production binary to ./bin/bifrost (auto-updates LOC in README)
 make test        # Execute unit test suite
 make lint        # Run go vet static code analysis
 make run         # Build and run in headless mode
 make tui         # Build and run interactively with full TUI
 make dev         # Run with hot-reloading (requires air)
-make release     # Cross-compile release binaries (linux-amd64, linux-arm64)
+make release     # Cross-compile release binaries and auto-update LOC in README
+make loc         # Explicitly recalculate and update LOC metrics in README.md
 ```
 
 ---
