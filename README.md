@@ -6,7 +6,7 @@
 [![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/nelobster/BIFROST)
 [![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org/)
 [![Go LOC](https://img.shields.io/badge/Go_LOC-3233-blue)](#codebase-structure--line-metrics)
-[![Total LOC](https://img.shields.io/badge/Total_LOC-3661-orange)](#codebase-structure--line-metrics)
+[![Total LOC](https://img.shields.io/badge/Total_LOC-4024-orange)](#codebase-structure--line-metrics)
 
 BIFROST is a zero-configuration, lightweight **classroom screen broadcasting server** written in Go. It streams a presenter's desktop (video + system audio) directly to student web browsers over a local network (LAN) using low-latency WebRTC (VP8 + Opus).
 
@@ -68,7 +68,7 @@ BIFROST/
 > **Automatic Update**: Metrics below and badges at the top update automatically whenever `make loc`, `make build`, or `make release` is executed.
 
 - **Go Codebase**: 3233 lines
-- **Total Repository**: 3661 lines
+- **Total Codebase**: 4024 lines
 
 | Package / Module | File Path | Description | Lines of Code |
 | ---------------- | --------- | ----------- | ------------- |
@@ -86,7 +86,10 @@ BIFROST/
 | **TUI View** | `internal/tui/tui.go` | Bubbletea terminal dashboard & event loops | 604 |
 | **WebRTC Manager**| `internal/webrtc/manager.go` | Pion PeerConnection management & track routing | 171 |
 | **RTP Receiver** | `internal/webrtc/rtp_receiver.go` | UDP `:5004`/`:5005` socket listener & atomic packet counters | 166 |
-| **Build & Dev** | `Makefile`, `.air.toml` | Build automation, live reload, release packaging, LOC script | 84 |
+| **Modules & Deps**| `go.mod`, `go.sum` | Go module definitions and checksum dependency locks | 180 |
+| **Build & Dev** | `Makefile`, `.air.toml` | Build automation, live reload, release packaging, LOC script | 98 |
+| **CI/CD & Config**| `.github/workflows/*`, `.goreleaser.yml`, `.gitignore` | GitHub Actions CI/CD workflows and release config | 131 |
+| **Documentation** | `README.md` | Comprehensive user manual, Linux guides, architecture spec | 330 |
 
 ---
 
@@ -253,39 +256,88 @@ Flags:
 
 ## Architecture & Data Flow
 
+### 1. High-Level Subsystem Diagram
+
 ```text
-               +---------------------------------------------------+
-               |                    HOST SYSTEM                    |
-               |                                                   |
- +----------+  | +------------------+     +----------------------+ |
- | Display  |--->| pipewiresrc/ximage|---->| VP8 Enc / RTP Pay    | |
- | (Wayland/|  | +------------------+     +----------------------+ |
- |   X11)   |  |                                     |             |
- +----------+  |                                UDP 5004           |
-               |                                     v             |  WebRTC (VP8+Opus)  +-------------------+
- +----------+  | +------------------+     +----------------------+ |--SDP/ICE via HTTP--->|  Student Browser  |
- | System   |--->| pulsesrc (monitor)|---->| Opus Enc / RTP Pay   | |                    | http://bifrost:8080|
- | Audio    |  | +------------------+     +----------------------+ |                    +-------------------+
- +----------+  |                                     |             |
-               |                                UDP 5005           |
-               |                                     v             |
-               |                        +------------------------+ |
-               |                        | Go RTP Receiver (Pion) | |
-               |                        +------------------------+ |
-               +---------------------------------------------------+
++---------------------------------------------------------------------------------------------------------------+
+|                                                HOST LINUX SYSTEM                                              |
+|                                                                                                               |
+|  +-----------------------+     +-------------------------------+     +-------------------------------------+  |
+|  |   DISPLAY SERVER      |     |     GSTREAMER VIDEO PIPELINE  |     |         GO RTP RECEIVER             |  |
+|  |  (Wayland / X11)      |---->| pipewiresrc / ximagesrc       |---->| UDP Socket :5004                    |  |
+|  |  - Mutter D-Bus API   |     | videoconvert ! vp8enc ! rtp   |     | atomic.Uint64 Video Packet Counter  |  |
+|  +-----------------------+     +-------------------------------+     +------------------+------------------+  |
+|                                                                                         |                     |
+|                                                                                         v                     |  WebRTC PeerConnection  +------------------+
+|                                                                              +---------------------+            |  (VP8 Video + Opus)   |                  |
+|                                                                              |  Pion WebRTC Track  |------------+----------------------->| STUDENT BROWSERS |
+|                                                                              |  (TrackLocalStatic) |            |                       |                  |
+|                                                                              +---------------------+            |  HTTP / WebRTC SDP    | http://bifrost   |
+|  +-----------------------+     +-------------------------------+                        ^                       |  Signaling & ICE      |       :8080      |
+|  |     SOUND SERVER      |     |     GSTREAMER AUDIO PIPELINE  |                        |                       |--------+------------->|                  |
+|  | (PipeWire / Pulse)    |---->| pulsesrc (monitor source)     |------------------------+                       |        |              +------------------+
+|  |  - pactl source lookup|     | audioconvert ! opusenc ! rtp  |     UDP Socket :5005                           |        |
+|  +-----------------------+     +-------------------------------+     atomic.Uint64 Audio Packet Counter         |        v
+|                                                                                                               |  +----------------------------------+
+|  +---------------------------------------------------------------------------------------------------------+  |  |      HTTP SERVER & WEB UI       |
+|  |   SYSTEM TELEMETRY & TUI                                                                                |  |  | - Server: /webrtc/offer, /ice   |
+|  |   - /proc & /sys metrics parser (CPU, RAM, Disk, GPU, Temp, Load)                                       |--|->| - Viewer: Embedded Player HTML5 |
+|  |   - Bubbletea Elm-architecture TUI dashboard & live logger feed                                        |  |  | - Tracker: Bandwidth & sessions |
+|  +---------------------------------------------------------------------------------------------------------+  |  +----------------------------------+
++---------------------------------------------------------------------------------------------------------------+
 ```
 
-1. **Screen Capture (`internal/capture`)**:
-   - On Wayland: Negotiates session via GNOME Mutter D-Bus API (`org.gnome.Mutter.ScreenCast`), polls PipeWire registry (`pw-cli info`) for node readiness, and spawns `gst-launch-1.0` with `pipewiresrc`.
-   - On X11: Spawns `gst-launch-1.0` with `ximagesrc`.
-2. **Audio Capture (`internal/capture`)**:
-   - Detects active PulseAudio / PipeWire monitor source (`pactl list short sources`).
-   - Spawns a dedicated `gst-launch-1.0` process encoding audio to Opus and outputting to UDP `:5005`. Running audio in a separate process avoids GStreamer clock synchronization stalls between PipeWire and PulseAudio.
-3. **WebRTC Delivery (`internal/webrtc`)**:
-   - `RTPReceiver` listens on UDP `:5004` (video) and `:5005` (audio).
-   - `Manager` handles client SDP offer/answer exchanges and streams WebRTC media tracks to connected browsers.
-4. **Embedded Viewer (`internal/server`)**:
-   - Serves an HTML5 player page with auto-reconnection and a user-gesture unmute prompt (`🔊 Click to enable audio`) adhering to browser autoplay policies.
+---
+
+### 2. End-to-End Pipeline Specifications
+
+#### A. Screen Capture Pipeline (`internal/capture`)
+1. **Wayland D-Bus Session Negotiation**:
+   - BIFROST calls `org.gnome.Mutter.ScreenCast.CreateSession` over D-Bus to establish a screen recording session.
+   - Invokes `RecordMonitor` specifying the primary display monitor.
+   - Starts the session via D-Bus and receives a PipeWire node ID (e.g., `node 123`).
+2. **PipeWire Node Readiness Polling (`waitForPipeWireNode`)**:
+   - To avoid race conditions where GStreamer attempts to bind before PipeWire negotiates stream formats (`stream error: target not found`), BIFROST polls `pw-cli info <nodeID>` every 200ms for up to 5 seconds.
+   - Once confirmed ready in the registry, a 500ms stabilization delay occurs before spawning GStreamer.
+3. **Video Encoding Pipeline**:
+   - **Command**: `gst-launch-1.0 pipewiresrc path=<nodeID> do-timestamp=true ! videoconvert ! vp8enc deadline=1 cpu-used=8 target-bitrate=2000000 keyframe-max-dist=30 ! rtpvp8pay ! udpsink host=127.0.0.1 port=5004`
+   - **X11 Fallback**: `ximagesrc use-damage=false ! videoconvert ! vp8enc ... ! udpsink host=127.0.0.1 port=5004`
+
+#### B. Audio Capture Pipeline (`internal/capture`)
+1. **Monitor Source Auto-Detection**:
+   - Executes `pactl list short sources` to find the default system audio monitor source (e.g., `alsa_output.pci-0000_00_1b.0.iec958-stereo.monitor`).
+2. **Clock Isolation (Independent GStreamer Process)**:
+   - **Architecture Decision**: Running `pipewiresrc` (PipeWire clock) and `pulsesrc` (PulseAudio clock) in a single GStreamer pipeline causes internal GStreamer clock desynchronization, stalling audio output.
+   - BIFROST launches audio as an independent `gst-launch-1.0` child process with its own dedicated GStreamer clock loop.
+3. **Audio Encoding Pipeline**:
+   - **Command**: `gst-launch-1.0 pulsesrc device=<monitor> ! audioconvert ! audioresample ! opusenc bitrate=64000 ! rtpopuspay ! udpsink host=127.0.0.1 port=5005`
+
+#### C. RTP Loopback Ingestion & Metrics (`internal/webrtc`)
+1. **UDP Socket Binding**:
+   - `RTPReceiver` binds local loopback UDP sockets on `:5004` (video) and `:5005` (audio) with `SO_REUSEPORT` enabled.
+2. **RTP Packet Forwarding**:
+   - `readLoop` parses incoming UDP payloads into `rtp.Packet` structures.
+   - Increments atomic packet counters (`videoPkts`, `audioPkts`) for system diagnostics.
+   - Writes parsed RTP packets directly into Pion `TrackLocalStaticRTP` video/audio tracks.
+
+#### D. WebRTC Signaling & Client Media Transport (`internal/server`, `internal/webrtc`)
+1. **SDP Offer/Answer Exchange**:
+   - Student browser requests `GET /` and downloads the embedded single-page player (`player_page.go`).
+   - Browser creates an `RTCPeerConnection` (`recvonly`), generates an SDP Offer, and POSTs to `/webrtc/offer`.
+   - `webrtc.Manager` attaches the active video (`VP8`) and audio (`Opus`) tracks, generates an SDP Answer, and returns it.
+2. **ICE Candidate Exchange**:
+   - Client sends local ICE candidates to `/ice` and polls remote server ICE candidates via `/ice/poll`.
+3. **Autoplay Policy Handling**:
+   - HTML5 `<video>` element starts playing in muted mode to comply with browser autoplay security policies.
+   - An overlay prompt (**"🔊 Click to enable audio"**) appears when live tracks are attached.
+   - A user click gesture on the stream area programmatically sets `video.muted = false`, enabling unmuted audio.
+
+#### E. Resilience & Fault Tolerance (`main.go`)
+1. **Capture Watchdog**:
+   - Goroutines monitor child process lifecycles for both video and audio `gst-launch-1.0` commands.
+2. **Auto-Retry Loop**:
+   - If a screen capture pipeline fails (e.g. PipeWire node churn or display re-configuration), the watchdog transitions `streaming = false`.
+   - The main orchestration loop in `main.go` automatically triggers a re-capture attempt every 3 seconds without operator intervention.
 
 ---
 

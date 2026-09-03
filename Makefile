@@ -13,12 +13,12 @@ all: build
 ## loc: Recalculate lines of code and update README.md automatically
 loc:
 	@GO_LOC=$$(git ls-files '*.go' | xargs wc -l | grep total | awk '{print $$1}'); \
-	TOTAL_LOC=$$(git ls-files '*.go' Makefile README.md .air.toml | xargs wc -l | grep total | awk '{print $$1}'); \
-	echo "Updating README.md metrics (Go LOC: $$GO_LOC, Total LOC: $$TOTAL_LOC)..."; \
+	TOTAL_LOC=$$(git ls-files | xargs wc -l | grep total | awk '{print $$1}'); \
+	echo "Updating README.md metrics (Go LOC: $$GO_LOC, Total Codebase LOC: $$TOTAL_LOC)..."; \
 	sed -i "s/Go_LOC-[0-9]*/Go_LOC-$$GO_LOC/g" README.md; \
 	sed -i "s/Total_LOC-[0-9]*/Total_LOC-$$TOTAL_LOC/g" README.md; \
 	sed -i "s/\*\*Go Codebase\*\*: [0-9]* lines/\*\*Go Codebase\*\*: $$GO_LOC lines/g" README.md; \
-	sed -i "s/\*\*Total Repository\*\*: [0-9]* lines/\*\*Total Repository\*\*: $$TOTAL_LOC lines/g" README.md
+	sed -i "s/\*\*Total Codebase\*\*: [0-9]* lines/\*\*Total Codebase\*\*: $$TOTAL_LOC lines/g" README.md
 
 ## build: Compile the binary (static, no CGO) and update LOC
 build: loc
