@@ -2,11 +2,11 @@
 
 **B**rowser **I**ntegrated **F**eed for **R**emote **O**bservation & **S**creen **T**ransmission
 
-[![License](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
-[![Platform](https://img.shields.io/badge/platform-Linux-lightgrey)](https://github.com/nelobster/BIFROST)
-[![Go](https://img.shields.io/badge/Go-1.22+-00ADD8?logo=go)](https://golang.org/)
-[![Go LOC](https://img.shields.io/badge/Go_LOC-3233-blue)](#codebase-structure--line-metrics)
-[![Total LOC](https://img.shields.io/badge/Total_LOC-4024-orange)](#codebase-structure--line-metrics)
+[![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)](https://github.com/msneloy/BIFROST)
+[![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg?logo=go)](https://golang.org/)
+[![Go LOC](https://img.shields.io/badge/Go_LOC-3233-blue.svg)](#codebase-structure--line-metrics)
+[![Total LOC](https://img.shields.io/badge/Total_LOC-4025-orange.svg)](#codebase-structure--line-metrics)
 
 BIFROST is a zero-configuration, lightweight **classroom screen broadcasting server** written in Go. It streams a presenter's desktop (video + system audio) directly to student web browsers over a local network (LAN) using low-latency WebRTC (VP8 + Opus).
 
@@ -68,7 +68,7 @@ BIFROST/
 > **Automatic Update**: Metrics below and badges at the top update automatically whenever `make loc`, `make build`, or `make release` is executed.
 
 - **Go Codebase**: 3233 lines
-- **Total Codebase**: 4024 lines
+- **Total Codebase**: 4025 lines
 
 | Package / Module | File Path | Description | Lines of Code |
 | ---------------- | --------- | ----------- | ------------- |
