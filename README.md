@@ -3,7 +3,7 @@
 **B**rowser **I**ntegrated **F**eed for **R**emote **O**bservation & **S**creen **T**ransmission
 
 [![License](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)](https://github.com/msneloy/BIFROST)
+[![Platform](https://img.shields.io/badge/Platform-Linux-lightgrey.svg)](https://github.com/MentorsNoakhali/BIFROST)
 [![Go](https://img.shields.io/badge/Go-1.22%2B-00ADD8.svg?logo=go)](https://golang.org/)
 [![Go LOC](https://img.shields.io/badge/Go_LOC-3233-blue.svg)](#codebase-structure--line-metrics)
 [![Total LOC](https://img.shields.io/badge/Total_LOC-4025-orange.svg)](#codebase-structure--line-metrics)
@@ -188,7 +188,7 @@ sudo systemctl enable --now avahi-daemon
 ## Quick Start
 
 ### 1. Download Pre-built Binary
-Download the binary for your architecture from the [Releases](https://github.com/msneloy/BIFROST/releases) page:
+Download the binary for your architecture from the [Releases](https://github.com/MentorsNoakhali/BIFROST/releases) page:
 
 ```bash
 # Make binary executable
@@ -203,7 +203,7 @@ Requirements: Go `1.22` or newer.
 
 ```bash
 # Clone the repository
-git clone https://github.com/msneloy/BIFROST.git
+git clone https://github.com/MentorsNoakhali/BIFROST.git
 cd BIFROST
 
 # Build executable
