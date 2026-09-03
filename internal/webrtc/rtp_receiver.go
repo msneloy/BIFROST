@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -18,6 +19,8 @@ type RTPReceiver struct {
 	audioConn  *net.UDPConn
 	videoTrack *webrtc.TrackLocalStaticRTP
 	audioTrack *webrtc.TrackLocalStaticRTP
+	videoPkts  atomic.Uint64
+	audioPkts  atomic.Uint64
 }
 
 // listenUDPWithReuse binds a UDP port with SO_REUSEPORT so stale sockets
@@ -93,12 +96,22 @@ func NewRTPReceiver(videoPort, audioPort int) (*RTPReceiver, error) {
 }
 
 func (r *RTPReceiver) Start(ctx context.Context) error {
-	go r.readLoop(ctx, r.videoConn, r.videoTrack, "video")
-	go r.readLoop(ctx, r.audioConn, r.audioTrack, "audio")
+	go r.readLoop(ctx, r.videoConn, r.videoTrack, &r.videoPkts, "video")
+	go r.readLoop(ctx, r.audioConn, r.audioTrack, &r.audioPkts, "audio")
 	return nil
 }
 
-func (r *RTPReceiver) readLoop(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalStaticRTP, name string) {
+// AudioPktCount returns the number of audio RTP packets received.
+func (r *RTPReceiver) AudioPktCount() uint64 {
+	return r.audioPkts.Load()
+}
+
+// VideoPktCount returns the number of video RTP packets received.
+func (r *RTPReceiver) VideoPktCount() uint64 {
+	return r.videoPkts.Load()
+}
+
+func (r *RTPReceiver) readLoop(ctx context.Context, conn *net.UDPConn, track *webrtc.TrackLocalStaticRTP, counter *atomic.Uint64, name string) {
 	buf := make([]byte, 1500) // MTU-sized buffer
 	pktCount := 0
 	for {
@@ -121,6 +134,10 @@ func (r *RTPReceiver) readLoop(ctx context.Context, conn *net.UDPConn, track *we
 		}
 
 		pktCount++
+		counter.Add(1)
+		if pktCount == 50 {
+			log.Printf("[WebRTC] RTP %s: first 50 packets received", name)
+		}
 		// Only log errors — normal packet flow pollutes the TUI
 		if err := track.WriteRTP(packet); err != nil {
 			if pktCount <= 3 {

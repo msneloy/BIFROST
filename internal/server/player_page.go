@@ -143,6 +143,44 @@ const playerHTML = `
         transform: scale(0.97);
       }
 
+      /* ─── Unmute overlay ───────────────────────────────────────────
+         Browsers block programmatic unmuting without a user gesture.
+         We show this banner once the stream is live so the viewer
+         can click once to enable audio.                              */
+      #unmute-overlay {
+        position: absolute;
+        bottom: 60px;
+        left: 50%;
+        transform: translateX(-50%);
+        z-index: 30;
+        background: rgba(0, 0, 0, 0.72);
+        backdrop-filter: blur(12px);
+        border: 1px solid rgba(255, 255, 255, 0.15);
+        border-radius: 10px;
+        padding: 10px 20px;
+        color: #fff;
+        font-size: 13px;
+        font-weight: 600;
+        letter-spacing: 0.4px;
+        cursor: pointer;
+        display: none;
+        align-items: center;
+        gap: 8px;
+        white-space: nowrap;
+        transition: background 0.15s, transform 0.15s;
+        animation: fadeInUp 0.3s ease;
+      }
+      #unmute-overlay:hover {
+        background: rgba(255, 255, 255, 0.12);
+      }
+      #unmute-overlay:active {
+        transform: translateX(-50%) scale(0.97);
+      }
+      @keyframes fadeInUp {
+        from { opacity: 0; transform: translateX(-50%) translateY(8px); }
+        to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+      }
+
       /* ─── Metrics (bottom-right) ───────────────────────────────── */
       .metrics {
         position: absolute;
@@ -274,6 +312,11 @@ const playerHTML = `
         <button class="ctrl-btn" id="btn-fullscreen" title="Fullscreen">
           ⛶ Fullscreen
         </button>
+      </div>
+
+      <!-- Unmute prompt (shown after autoplay; hidden once user clicks) -->
+      <div id="unmute-overlay">
+        🔊 Click to enable audio
       </div>
 
       <!-- Metrics -->
@@ -480,8 +523,11 @@ const playerHTML = `
             video
               .play()
               .then(() => {
-                // Unmute after playback starts — browsers require user gesture
-                video.muted = false;
+                // Show the unmute overlay for the user to click.
+                // Browsers require a user gesture to enable audio.
+                if (video.muted) {
+                  $("unmute-overlay").style.display = "flex";
+                }
               })
               .catch(() => {});
           };
@@ -570,6 +616,14 @@ const playerHTML = `
         if (!document.fullscreenElement) el.requestFullscreen().catch(() => {});
         else document.exitFullscreen();
       });
+
+      // Unmute handler — clicking the overlay OR anywhere on the video unmutes
+      function unmute() {
+        video.muted = false;
+        $("unmute-overlay").style.display = "none";
+      }
+      $("unmute-overlay").addEventListener("click", unmute);
+      $("video-container").addEventListener("click", unmute);
 
       // ─── Init ────────────────────────────────────────────────────
       connect();
