@@ -36,13 +36,13 @@ clean:
 install:
 	go install $(GOFLAGS) -ldflags "$(LDFLAGS)" .
 
-## run: Build and run (headless mode for quick testing)
+## run: Build and run with TUI dashboard
 run: build
-	./bin/$(BINARY) --headless
+	./bin/$(BINARY)
 
-## dev: Run with hot-reload and TUI (auto-restarts on code changes)
+## dev: Run with hot-reload in headless mode (auto-restarts on code changes)
 dev:
-	$(shell go env GOPATH)/bin/air
+	$(shell go env GOPATH)/bin/air -- --headless
 
 ## release: Build release binaries for Linux amd64/arm64 (static)
 release:
