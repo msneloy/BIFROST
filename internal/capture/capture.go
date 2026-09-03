@@ -20,6 +20,7 @@ import (
 type Capture struct {
 	config    *config.Config
 	videoCmd  *exec.Cmd
+	audioCmd  *exec.Cmd  // separate process — avoids GStreamer clock conflicts
 	dbusConn  *dbus.Conn // kept alive for Wayland Mutter session
 	streaming bool
 	mu        sync.Mutex
@@ -83,8 +84,8 @@ func (c *Capture) startX11(ctx context.Context) error {
 }
 
 // startWayland captures the screen on GNOME/Wayland using the Mutter
-// ScreenCast D-Bus API + GStreamer. Single pipeline for video+audio so they
-// share the same GStreamer clock for perfect sync.
+// ScreenCast D-Bus API + GStreamer. Video and audio run as separate
+// gst-launch-1.0 processes to avoid PipeWire/PulseAudio clock conflicts.
 func (c *Capture) startWayland(ctx context.Context) error {
 	conn, nodeID, err := mutterScreenCastNode()
 	if err != nil {
@@ -92,40 +93,68 @@ func (c *Capture) startWayland(ctx context.Context) error {
 	}
 	c.dbusConn = conn
 
-	// Build pipeline matching the original mutter_capture.py exactly.
-	// tee with two branches: VP8→RTP and fakesink (keeps pipeline flowing).
-	pipeline := fmt.Sprintf(
+	// Wait for PipeWire to actually register the node before GStreamer tries
+	// to open it. Without this delay there is a race where gst-launch-1.0
+	// receives "stream error: target not found" because the node ID returned
+	// by the D-Bus signal hasn't been published to the PipeWire registry yet.
+	if err := waitForPipeWireNode(ctx, nodeID, 5*time.Second); err != nil {
+		conn.Close()
+		return fmt.Errorf("PipeWire node %d never became ready: %w", nodeID, err)
+	}
+
+	// ── Video pipeline (PipeWire → VP8 → RTP :5004) ──────────────────────
+	videoPipeline := fmt.Sprintf(
 		"pipewiresrc path=%d ! videoconvert ! videorate ! video/x-raw,framerate=%d/1 ! tee name=t "+
 			"t. ! queue max-size-buffers=1 leaky=downstream ! vp8enc threads=4 deadline=1 cpu-used=8 ! rtpvp8pay ! udpsink host=127.0.0.1 port=5004 sync=false "+
 			"t. ! queue max-size-buffers=1 leaky=downstream ! fakesink sync=false",
 		nodeID, c.config.FPS,
 	)
 
+	c.videoCmd = exec.CommandContext(ctx, "gst-launch-1.0", append([]string{"-q"}, strings.Fields(videoPipeline)...)...)
+	c.videoCmd.Stderr = os.Stderr
+	if err := c.videoCmd.Start(); err != nil {
+		return fmt.Errorf("GStreamer video: %w", err)
+	}
+	log.Printf("[+] Wayland capture started (PipeWire node %d, %dfps)", nodeID, c.config.FPS)
+
+	// ── Audio pipeline (PulseAudio monitor → Opus → RTP :5005) ───────────
+	// Run as a SEPARATE process so its PulseAudio clock doesn't conflict
+	// with pipewiresrc's PipeWire clock inside a shared GStreamer pipeline.
 	if !c.config.NoAudio {
 		source := detectPulseSource()
 		if source != "" {
-			pipeline += fmt.Sprintf(
-				" pulsesrc device=%s ! audioconvert ! opusenc bitrate=64000 audio-type=restricted-lowdelay ! rtpopuspay ! udpsink host=127.0.0.1 port=5005 sync=false",
+			audioPipeline := fmt.Sprintf(
+				"pulsesrc device=%s ! audioconvert ! opusenc bitrate=64000 audio-type=restricted-lowdelay ! rtpopuspay ! udpsink host=127.0.0.1 port=5005 sync=false",
 				source,
 			)
+			c.audioCmd = exec.CommandContext(ctx, "gst-launch-1.0", append([]string{"-q"}, strings.Fields(audioPipeline)...)...)
+			c.audioCmd.Stderr = os.Stderr
+			if err := c.audioCmd.Start(); err != nil {
+				log.Printf("[capture] Audio pipeline failed to start: %v", err)
+			} else {
+				log.Printf("[+] Audio capture started (%s, Opus)", source)
+				go func() {
+					c.audioCmd.Wait() //nolint:errcheck
+					log.Println("[capture] Audio pipeline exited")
+				}()
+			}
+		} else {
+			log.Println("[capture] No audio source found, skipping audio")
 		}
 	}
 
-	c.videoCmd = exec.CommandContext(ctx, "gst-launch-1.0", append([]string{"-q"}, strings.Fields(pipeline)...)...)
-	c.videoCmd.Stderr = os.Stderr
-
-	if err := c.videoCmd.Start(); err != nil {
-		return fmt.Errorf("GStreamer: %w", err)
-	}
-
-	log.Printf("[+] Wayland capture started (PipeWire node %d, %dfps)", nodeID, c.config.FPS)
 	c.setStreaming(true)
+
+	// Watchdog: mark streaming=false when video pipeline exits.
+	go func() {
+		c.videoCmd.Wait() //nolint:errcheck
+		c.setStreaming(false)
+		log.Println("[capture] GStreamer video pipeline exited")
+	}()
+
 	return nil
 }
 
-// mutterScreenCastNode uses the GNOME Mutter ScreenCast D-Bus API to start a
-// screen capture session and returns the D-Bus connection (must be kept alive)
-// and the PipeWire node ID.
 func mutterScreenCastNode() (*dbus.Conn, uint32, error) {
 	conn, err := dbus.ConnectSessionBus()
 	if err != nil {
@@ -200,6 +229,30 @@ func (c *Capture) setStreaming(v bool) {
 	c.mu.Unlock()
 }
 
+// waitForPipeWireNode polls pw-cli until the given node ID appears in the
+// PipeWire registry, or until the deadline is reached. This prevents the
+// GStreamer pipeline from starting before the node is actually available.
+func waitForPipeWireNode(ctx context.Context, nodeID uint32, timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for time.Now().Before(deadline) {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+		out, err := exec.CommandContext(ctx, "pw-cli", "info", fmt.Sprintf("%d", nodeID)).Output()
+		if err == nil && len(out) > 0 {
+			log.Printf("[capture] PipeWire node %d is ready", nodeID)
+			// Give PipeWire an extra moment to fully negotiate the stream
+			// format before GStreamer connects.
+			time.Sleep(500 * time.Millisecond)
+			return nil
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	return fmt.Errorf("timeout after %s", timeout)
+}
+
 // Stop kills all capture processes.
 func (c *Capture) Stop() {
 	c.mu.Lock()
@@ -208,6 +261,11 @@ func (c *Capture) Stop() {
 	if c.videoCmd != nil && c.videoCmd.Process != nil {
 		c.videoCmd.Process.Kill()
 		c.videoCmd.Wait()
+	}
+	if c.audioCmd != nil && c.audioCmd.Process != nil {
+		c.audioCmd.Process.Kill()
+		c.audioCmd.Wait()
+		c.audioCmd = nil
 	}
 	if c.dbusConn != nil {
 		c.dbusConn.Close()
